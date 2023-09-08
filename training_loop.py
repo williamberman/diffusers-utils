@@ -79,12 +79,14 @@ def training_loop(config):
 
     accelerator.init_trackers("t2iadapter")
 
-    accelerator.register_save_state_pre_hook(config.training_spec_class.save_model_hook)
-    accelerator.register_load_state_pre_hook(config.training_spec_class.load_model_hook)
+    accelerator.register_save_state_pre_hook(save_model_hook)
+    accelerator.register_load_state_pre_hook(load_model_hook)
 
-    training_spec = config.training_spec_class(config, accelerator)
+    training_spec = config.training_spec_class(config=config, accelerator=accelerator)
 
-    optimizer = AdamW(training_spec.training_parameters(), lr=1e-5)
+    model = training_spec.training_model()
+
+    optimizer = AdamW(model.parameters(), lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
@@ -126,14 +128,14 @@ def training_loop(config):
     )
 
     for batch in dataloader:
-        with accelerator.accumulate(training_spec.training_model()):
+        with accelerator.accumulate(model):
             loss = training_spec.train_step(batch, accelerator)
 
             accelerator.backward(loss)
 
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(
-                    training_spec.training_parameters(), config.max_grad_norm
+                    model.parameters(), config.max_grad_norm
                 )
 
             optimizer.step()
@@ -167,9 +169,23 @@ def training_loop(config):
     accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
-        training_spec.save_results()
+        accelerator.unwrap_model(model).save_pretrained(accelerator.project_dir)
 
     accelerator.end_training()
+
+def save_model_hook(models, weights, output_dir):
+    models_idx = 0
+
+    while len(weights) > 0:
+        model = models[models_idx]
+        weights.pop()
+        model.save_pretrained(os.path.join(output_dir, model.__class__.__name__))
+        models_idx += 1
+
+def load_model_hook(models, input_dir):
+    while len(models) > 0:
+        model = models.pop()
+        model.from_pretrained(input_dir, subfolder=model.__class__.__name__)
 
 
 def checkpoint(output_dir, checkpoints_total_limit, global_step, accelerator):

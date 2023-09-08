@@ -19,21 +19,6 @@ from .training_loop import Config
 
 
 class SDXLT2IOpenpose:
-    @classmethod
-    def save_model_hook(models, weights, output_dir):
-        assert len(models) == 1
-        assert len(weights) == 1
-
-        weights = weights.pop()
-        model = models[0]
-        model.save_pretrained(os.path.join(output_dir, "t2iadapter"))
-
-    @classmethod
-    def load_model_hook(models, input_dir):
-        assert len(models) == 1
-        model = models.pop()
-        model.from_pretrained(input_dir, subfolder="t2iadapter")
-
     def __init__(self, config: Config, accelerator: Accelerator):
         self.config = config
         self.accelerator = accelerator
@@ -312,10 +297,6 @@ class SDXLT2IOpenpose:
         prompt_embeds = torch.cat((prompt_embeds_1, prompt_embeds_2))
 
         return prompt_embeds, pooled_prompt_embeds_2
-
-    def save_results(self):
-        adapter = self.accelerator.unwrap_model(self.adapter)
-        adapter.save_pretrained(self.accelerator.project_dir)
 
 
 def get_sigmas(noise_scheduler, timesteps):
