@@ -167,7 +167,9 @@ def log_adapter_validation(step):
         validation_image = validation_images[i]
 
         output_validation_images_ = output_validation_images[
-            i * training_config.num_validation_images : i * training_config.num_validation_images
+            i
+            * training_config.num_validation_images : i
+            * training_config.num_validation_images
             + training_config.num_validation_images
         ]
 

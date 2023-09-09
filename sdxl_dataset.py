@@ -21,26 +21,45 @@ def get_sdxl_dataset():
             handler=wds.warn_and_continue,
         ),
         wds.map(make_sample),
-        wds.batched(training_config.batch_size, partial=False, collation_fn=default_collate),
+        wds.batched(
+            training_config.batch_size, partial=False, collation_fn=default_collate
+        ),
     )
 
 
+@torch.no_grad()
 def make_sample(d):
     image = d["image"]
     text = d["text"]
     metadata = d["json"]
 
-    image = TF.resize(
-        image, training_config.resolution, interpolation=transforms.InterpolationMode.BILINEAR
+    resized_image = TF.resize(
+        image,
+        training_config.resolution,
+        interpolation=transforms.InterpolationMode.BILINEAR,
     )
 
     c_top, c_left, _, _ = transforms.RandomCrop.get_params(
         image, output_size=(training_config.resolution, training_config.resolution)
     )
 
-    image = TF.crop(image, c_top, c_left, training_config.resolution, training_config.resolution)
-    image = TF.to_tensor(image)
-    image = TF.normalize(image, [0.5], [0.5])
+    resized_and_cropped_image = TF.crop(
+        resized_image,
+        c_top,
+        c_left,
+        training_config.resolution,
+        training_config.resolution,
+    )
+    resized_and_cropped_image_tensor = TF.to_tensor(resized_and_cropped_image)
+    resized_and_cropped_and_normalized_image_tensor = TF.normalize(
+        resized_and_cropped_image_tensor, [0.5], [0.5]
+    )
+
+    latents = vae.encode(
+        resized_and_cropped_and_normalized_image_tensor.to(
+            device=vae.device, dtype=vae.dtype
+        )
+    ).latent_dist.sample()
 
     original_width = int(metadata.get("original_width", 0.0))
     original_height = int(metadata.get("original_height", 0.0))
@@ -58,10 +77,6 @@ def make_sample(d):
 
     prompt_embeds, pooled_prompt_embeds_2 = text_conditioning(text)
 
-    latents = vae.encode(
-        image.to(device=vae.device, dtype=vae.dtype)
-    ).latent_dist.sample()
-
     sample = {
         "time_ids": time_ids,
         "latents": latents.to("cpu"),
@@ -73,7 +88,9 @@ def make_sample(d):
         if training_config.adapter_type == "mediapipe_pose":
             from .mediapipe_pose import mediapipe_pose_adapter_image
 
-            adapter_image = mediapipe_pose_adapter_image()
+            adapter_image = mediapipe_pose_adapter_image(
+                resized_and_cropped_image.numpy()
+            )
         else:
             assert False
 

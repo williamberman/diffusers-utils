@@ -33,15 +33,19 @@ def init_mediapipe_pose():
     detector = vision.PoseLandmarker.create_from_options(options)
 
 
-def mediapipe_pose_adapter_image(input_image):
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.asarray(input_image))
+def mediapipe_pose_adapter_image(numpy_image):
+    height, width = numpy_image.shape[-2]
+
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=numpy_image)
+
     detection_result = detector.detect(mp_image)
+
     pose_landmarks = detection_result.pose_landmarks
 
     if len(pose_landmarks) == 0:
         return None
 
-    pose = np.zeros((input_image.height, input_image.width, 3), dtype=np.uint8)
+    pose = np.zeros((height, width, 3), dtype=np.uint8)
     draw_landmarks_on_image(pose, pose_landmarks)
 
     pose = Image.fromarray(pose)

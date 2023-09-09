@@ -125,7 +125,10 @@ def main():
 
             dist.barrier()
 
-        if dist.get_global_rank() == 0 and global_step % training_config.validation_steps == 0:
+        if (
+            dist.get_global_rank() == 0
+            and global_step % training_config.validation_steps == 0
+        ):
             logger.info("Running validation... ")
 
             if training_config.training == "sdxl_adapter":
