@@ -1,117 +1,71 @@
 import logging
 import os
 import shutil
-from argparse import ArgumentParser
-from dataclasses import dataclass
-from typing import List
 
-import diffusers
 import torch
-import transformers
-import yaml
-from accelerate import Accelerator
+import torch.distributed as dist
+import wandb
 from accelerate.logging import get_logger
+from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .sdxl_t2i_openpose import SDXLT2IOpenpose
+from .config import config
+from .sdxl import adapter, init_sdxl, log_adapter_validation, sdxl_train_step
+from .sdxl_dataset import get_sdxl_dataset
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
 logger = get_logger(__name__)
 
-
-@dataclass
-class Config:
-    output_dir: str
-    gradient_accumulation_steps: int
-    mixed_precision: str
-    resume_from: str
-    max_grad_norm: float
-    checkpointing_steps: int
-    checkpoints_total_limit: int
-    validation_steps: int
-    max_train_steps: int
-    validation_prompts: List[str]
-    num_validation_images: int
-    train_shards: str
-    shuffle_buffer_size: int
-    resolution: int
-    batch_size: int
-    training_spec_class: object
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    datefmt="%m/%d/%Y %H:%M:%S",
+    level=logging.INFO,
+)
 
 
 def main():
-    args = ArgumentParser()
-
-    args.add_argument("--config_path")
-
-    args = args.parse_args()
-
-    config = load_config(args.config_path)
-
-    training_loop(config)
-
-
-def load_config(config_path):
-    config: Config = yaml.safe_load(config_path)
-
-    if config.training_spec_class == "SDXLT2IOpenpose":
-        config.training_spec_class = SDXLT2IOpenpose
-    else:
-        raise ValueError(f"unknown training_spec_class: {config.training_spec_class}")
-
-    return config
-
-
-def training_loop(config):
     os.makedirs(config.output_dir, exist_ok=True)
 
-    accelerator = Accelerator(
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        mixed_precision=config.mixed_precision,
-        log_with="wandb",
-        project_dir=config.output_dir,
-        split_batches=True,
-    )
+    wandb.init()
 
-    accelerator.init_trackers("t2iadapter")
+    dist.init_process_group("nccl")
 
-    accelerator.register_save_state_pre_hook(save_model_hook)
-    accelerator.register_load_state_pre_hook(load_model_hook)
+    if config.training == "sdxl_adapter":
+        init_sdxl()
+    else:
+        assert False
 
-    training_spec = config.training_spec_class(config=config, accelerator=accelerator)
+    if config.training == "sdxl_adapter":
+        training_parameters = adapter.parameters()
+        parameters_to_clip = adapter.parameters()
+    else:
+        assert False
 
-    model = training_spec.training_model()
-
-    optimizer = AdamW(model.parameters(), lr=1e-5)
+    optimizer = AdamW(training_parameters, lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
-    optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
+    if config.resume_from is not None:
+        load_checkpoint(config.resume_from, optimizer=optimizer)
 
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO,
+    if config.training == "sdxl_adapter":
+        dataset = get_sdxl_dataset()
+    else:
+        assert False
+
+    global_step = 0
+
+    progress_bar = tqdm(
+        range(0, config.max_train_steps),
+        disable=dist.get_global_rank() != 0,
     )
 
-    logger.info(accelerator.state, main_process_only=False)
-
-    if accelerator.is_local_main_process:
-        transformers.utils.logging.set_verbosity_warning()
-        diffusers.utils.logging.set_verbosity_info()
-    else:
-        transformers.utils.logging.set_verbosity_error()
-        diffusers.utils.logging.set_verbosity_error()
-
-    if config.resume_from is not None:
-        accelerator.load_state(config.resume_from)
-
     dataloader = DataLoader(
-        training_spec.get_dataset(),
+        dataset,
         batch_size=None,
         shuffle=False,
         num_workers=8,
@@ -120,75 +74,76 @@ def training_loop(config):
         prefetch_factor=8,
     )
 
-    global_step = 0
+    dataloader = iter(dataloader)
 
-    progress_bar = tqdm(
-        range(0, config.max_train_steps),
-        disable=not accelerator.is_local_main_process,
-    )
+    while True:
+        accumulated_loss = None
 
-    for batch in dataloader:
-        with accelerator.accumulate(model):
-            loss = training_spec.train_step(batch, accelerator)
+        for _ in range(config.gradient_accumulation_steps):
+            batch = next(dataloader)
 
-            accelerator.backward(loss)
+            with torch.autocast(
+                "cuda",
+                config.mixed_precision,
+                enabled=config.mixed_precision is not None,
+            ):
+                if config.training == "sdxl_adapter":
+                    loss = sdxl_train_step(batch)
+                else:
+                    assert False
 
-            if accelerator.sync_gradients:
-                accelerator.clip_grad_norm_(
-                    model.parameters(), config.max_grad_norm
+            loss = loss / config.gradient_accumulation_steps
+            loss.backward()
+
+            if accumulated_loss is None:
+                accumulated_loss = loss.detach()
+            else:
+                accumulated_loss += loss.detach()
+
+        clip_grad_norm_(parameters_to_clip, 1.0)
+
+        optimizer.step()
+        lr_scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+
+        progress_bar.update(1)
+        global_step += 1
+
+        if global_step % config.checkpointing_steps == 0:
+            if dist.get_global_rank() == 0:
+                save_checkpoint(
+                    output_dir=config.output_dir,
+                    checkpoints_total_limit=config.checkpoints_total_limit,
+                    global_step=global_step,
+                    optimizer=optimizer,
                 )
 
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
+            dist.barrier()
 
-            if accelerator.sync_gradients:
-                progress_bar.update(1)
-                global_step += 1
+        if dist.get_global_rank() == 0 and global_step % config.validation_steps == 0:
+            logger.info("Running validation... ")
 
-                if accelerator.is_main_process:
-                    if global_step % config.checkpointing_steps == 0:
-                        checkpoint(
-                            output_dir=config.output_dir,
-                            checkpoints_total_limit=config.checkpoints_total_limit,
-                            global_step=global_step,
-                            accelerator=accelerator,
-                        )
+            if config.training == "sdxl_adapter":
+                log_adapter_validation(global_step)
+            else:
+                assert False
 
-                    if global_step % config.validation_steps == 0:
-                        logger.info("Running validation... ")
-                        training_spec.log_validation()
+        logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
+        progress_bar.set_postfix(**logs)
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
-            accelerator.log(logs, step=global_step)
+        if global_step >= config.max_train_steps:
+            break
 
-            if global_step >= config.max_train_steps:
-                break
+    dist.barrier()
 
-    accelerator.wait_for_everyone()
-
-    if accelerator.is_main_process:
-        accelerator.unwrap_model(model).save_pretrained(accelerator.project_dir)
-
-    accelerator.end_training()
-
-def save_model_hook(models, weights, output_dir):
-    models_idx = 0
-
-    while len(weights) > 0:
-        model = models[models_idx]
-        weights.pop()
-        model.save_pretrained(os.path.join(output_dir, model.__class__.__name__))
-        models_idx += 1
-
-def load_model_hook(models, input_dir):
-    while len(models) > 0:
-        model = models.pop()
-        model.from_pretrained(input_dir, subfolder=model.__class__.__name__)
+    if dist.get_global_rank() == 0:
+        if config.training == "sdxl_adapter":
+            adapter.module.save_pretrained(config.output_dir)
+        else:
+            assert False
 
 
-def checkpoint(output_dir, checkpoints_total_limit, global_step, accelerator):
+def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer):
     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
     if checkpoints_total_limit is not None:
         checkpoints = os.listdir(output_dir)
@@ -210,8 +165,28 @@ def checkpoint(output_dir, checkpoints_total_limit, global_step, accelerator):
                 shutil.rmtree(removing_checkpoint)
 
     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
-    accelerator.save_state(save_path)
+
+    if config.training == "sdxl_adapter":
+        adapter.module.save_pretrained(output_dir, subfolder="adapter")
+    else:
+        assert False
+
+    torch.save(optimizer.state_dict(), os.path.join(save_path, "optimizer.bin"))
+
     logger.info(f"Saved state to {save_path}")
+
+
+def load_checkpoint(resume_from, optimizer):
+    optimizer.load(os.path.join(resume_from, "optimizer.bin"))
+
+    if config.training == "sdxl_adapter":
+        adapter_state_dict = torch.load(
+            os.path.join(resume_from, "adapter", "pytorch_model.bin"),
+            map_location=adapter.device,
+        )
+        adapter.load_state_dict(adapter_state_dict)
+    else:
+        assert False
 
 
 if __name__ == "__main__":
