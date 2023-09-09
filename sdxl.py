@@ -15,15 +15,14 @@ from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizerFast
 
-from .training_config import training_config
+from training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
-vae_repo = "madebyollin/sdxl-vae-fp16-fix"
 
 vae: AutoencoderKL = None
 
 tokenizer_one: CLIPTokenizerFast = None
-text_encoder_one: CLIPTextModel
+text_encoder_one: CLIPTextModel = None
 
 tokenizer_two: CLIPTokenizerFast = None
 text_encoder_two: CLIPTextModelWithProjection = None
@@ -50,26 +49,26 @@ def init_sdxl():
     tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
     tokenizer_two = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer_2")
 
-    text_encoder_one = CLIPTextModel.from_pretrained(repo, subfolder="text_encoder")
-    text_encoder_one.to(device=device_id, dtype=torch.float16)
+    text_encoder_one = CLIPTextModel.from_pretrained(repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_one.to(device=device_id)
     text_encoder_one.requires_grad_(False)
     text_encoder_one.train(False)
 
     text_encoder_two = CLIPTextModelWithProjection.from_pretrained(
-        repo, subfolder="text_encoder_2"
+        repo, subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16
     )
-    text_encoder_two.to(device=device_id, dtype=torch.float16)
+    text_encoder_two.to(device=device_id)
     text_encoder_two.requires_grad_(False)
     text_encoder_two.train(False)
 
-    unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet")
-    unet.to(device=device_id, dtype=torch.float16)
+    unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet", variant="fp16", torch_dtype=torch.float16)
+    unet.to(device=device_id)
     unet.train(False)
     unet.requires_grad_(False)
     unet.enable_xformers_memory_efficient_attention()
 
-    vae = AutoencoderKL.from_pretrained(vae_repo)
-    vae.to(device=device_id, dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+    vae.to(device=device_id)
     vae.requires_grad_(False)
     vae.train(False)
 
@@ -83,10 +82,13 @@ def init_sdxl():
             downscale_factor=16,
             adapter_type="full_adapter_xl",
         )
+        adapter.to(device=device_id)
         adapter.train()
         adapter.requires_grad_(True)
         adapter.enable_xformers_memory_efficient_attention()
-        model = DDP(model, device_ids=[device_id])
+        adapter = DDP(adapter, device_ids=[device_id])
+    else:
+        assert False
 
 
 def sdxl_train_step(batch):
@@ -128,7 +130,7 @@ def sdxl_train_step(batch):
 
 
 @torch.no_grad()
-def log_adapter_validation(step):
+def sdxl_log_adapter_validation(step):
     adapter_ = adapter.module
 
     pipeline = StableDiffusionXLAdapterPipeline(

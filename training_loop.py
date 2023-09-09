@@ -12,9 +12,9 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .sdxl import adapter, init_sdxl, log_adapter_validation, sdxl_train_step
-from .sdxl_dataset import get_sdxl_dataset
-from .training_config import training_config
+from sdxl import adapter, init_sdxl, sdxl_log_adapter_validation, sdxl_train_step
+from sdxl_dataset import get_sdxl_dataset
+from training_config import training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -38,7 +38,7 @@ def main():
         init_sdxl()
 
         if training_config.adapter_type == "mediapipe_pose":
-            from .mediapipe_pose import init_mediapipe_pose
+            from mediapipe_pose import init_mediapipe_pose
 
             init_mediapipe_pose()
     else:
@@ -132,7 +132,7 @@ def main():
             logger.info("Running validation... ")
 
             if training_config.training == "sdxl_adapter":
-                log_adapter_validation(global_step)
+                sdxl_log_adapter_validation(global_step)
             else:
                 assert False
 
