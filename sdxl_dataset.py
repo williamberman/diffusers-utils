@@ -40,7 +40,7 @@ def make_sample(d):
     )
 
     c_top, c_left, _, _ = transforms.RandomCrop.get_params(
-        image, output_size=(training_config.resolution, training_config.resolution)
+        resized_image, output_size=(training_config.resolution, training_config.resolution)
     )
 
     resized_and_cropped_image = TF.crop(
