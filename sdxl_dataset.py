@@ -8,20 +8,20 @@ from training_config import training_config
 
 
 def get_sdxl_dataset():
-    return wds.DataPipeline(
-        wds.ResampledShards(training_config.train_shards),
-        wds.shuffle(training_config.shuffle_buffer_size),
-        wds.decode("pil", handler=wds.ignore_and_continue),
-        wds.rename(
+    return (
+        wds.WebDataset(training_config.train_shards, resampled=True)
+        .shuffle(100)
+        .decode("pil", handler=wds.ignore_and_continue)
+        .rename(
             image="jpg;png;jpeg;webp",
             text="text;txt;caption",
             metadata="json",
             handler=wds.warn_and_continue,
-        ),
-        wds.map(make_sample),
-        wds.batched(
+        )
+        .map(make_sample)
+        .batched(
             training_config.batch_size, partial=False, collation_fn=default_collate
-        ),
+        )
     )
 
 
@@ -31,7 +31,7 @@ def make_sample(d):
 
     image = d["image"]
     text = d["text"]
-    metadata = d["json"]
+    metadata = d["metadata"]
 
     resized_image = TF.resize(
         image,

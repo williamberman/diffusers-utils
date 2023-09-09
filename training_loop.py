@@ -38,11 +38,6 @@ def main():
         init_sdxl()
 
         from sdxl import adapter
-
-        if training_config.adapter_type == "mediapipe_pose":
-            from mediapipe_pose import init_mediapipe_pose
-
-            init_mediapipe_pose()
     else:
         assert False
 
@@ -79,6 +74,7 @@ def main():
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=8,
+        worker_init_fn=dataloader_worker_init_fn,
     )
 
     dataloader = iter(dataloader)
@@ -174,6 +170,8 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
 
     if training_config.training == "sdxl_adapter":
+        from sdxl import adapter
+
         adapter.module.save_pretrained(output_dir, subfolder="adapter")
     else:
         assert False
@@ -187,6 +185,8 @@ def load_checkpoint(resume_from, optimizer):
     optimizer.load(os.path.join(resume_from, "optimizer.bin"))
 
     if training_config.training == "sdxl_adapter":
+        from sdxl import adapter
+
         adapter_state_dict = torch.load(
             os.path.join(resume_from, "adapter", "pytorch_model.bin"),
             map_location=adapter.device,
@@ -194,6 +194,13 @@ def load_checkpoint(resume_from, optimizer):
         adapter.load_state_dict(adapter_state_dict)
     else:
         assert False
+
+
+def dataloader_worker_init_fn(worker_id):
+    if training_config.adapter_type == "mediapipe_pose":
+        from mediapipe_pose import init_mediapipe_pose
+
+        init_mediapipe_pose()
 
 
 if __name__ == "__main__":
