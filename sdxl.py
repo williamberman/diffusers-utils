@@ -37,7 +37,7 @@ _init_sdxl_called = False
 
 
 def init_sdxl():
-    global _init_sdxl_called, vae, tokenizer_one, text_encoder_one, tokenizer_two, text_encoder_two, unet, scheduler
+    global _init_sdxl_called, vae, tokenizer_one, text_encoder_one, tokenizer_two, text_encoder_two, unet, scheduler, adapter
 
     if _init_sdxl_called:
         raise ValueError("`init_sdxl_models` called more than once")
@@ -63,8 +63,8 @@ def init_sdxl():
 
     unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet", variant="fp16", torch_dtype=torch.float16)
     unet.to(device=device_id)
-    unet.train(False)
     unet.requires_grad_(False)
+    unet.train(False)
     unet.enable_xformers_memory_efficient_attention()
 
     vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
