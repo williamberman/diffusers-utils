@@ -3,18 +3,15 @@ import os
 import torch
 import torch.distributed as dist
 import torch.functional as F
-import wandb
-from diffusers import (
-    AutoencoderKL,
-    EulerDiscreteScheduler,
-    StableDiffusionXLAdapterPipeline,
-    T2IAdapter,
-    UNet2DConditionModel,
-)
+from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
+                       StableDiffusionXLAdapterPipeline, T2IAdapter,
+                       UNet2DConditionModel)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizerFast
+from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
+                          CLIPTokenizerFast)
 
+import wandb
 from training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -49,7 +46,9 @@ def init_sdxl():
     tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
     tokenizer_two = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer_2")
 
-    text_encoder_one = CLIPTextModel.from_pretrained(repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_one = CLIPTextModel.from_pretrained(
+        repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16
+    )
     text_encoder_one.to(device=device_id)
     text_encoder_one.requires_grad_(False)
     text_encoder_one.train(False)
@@ -61,13 +60,17 @@ def init_sdxl():
     text_encoder_two.requires_grad_(False)
     text_encoder_two.train(False)
 
-    unet = UNet2DConditionModel.from_pretrained(repo, subfolder="unet", variant="fp16", torch_dtype=torch.float16)
+    unet = UNet2DConditionModel.from_pretrained(
+        repo, subfolder="unet", variant="fp16", torch_dtype=torch.float16
+    )
     unet.to(device=device_id)
     unet.requires_grad_(False)
     unet.train(False)
     unet.enable_xformers_memory_efficient_attention()
 
-    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    )
     vae.to(device=device_id)
     vae.requires_grad_(False)
     vae.train(False)

@@ -28,10 +28,13 @@ class Config:
     resolution: int = 1024
     batch_size: int = 8
 
-if "CONFIG" not in os.environ:
-    raise ValueError("Must set environment variable `CONFIG` to path to the yaml config to use for the training run.")
 
-with open(os.environ["CONFIG"], 'r') as f:
+if "CONFIG" not in os.environ:
+    raise ValueError(
+        "Must set environment variable `CONFIG` to path to the yaml config to use for the training run."
+    )
+
+with open(os.environ["CONFIG"], "r") as f:
     yaml_config = yaml.safe_load(f.read())
 
 if (

@@ -4,7 +4,6 @@ import webdataset as wds
 from torch.utils.data import default_collate
 from torchvision import transforms
 
-from sdxl import text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae
 from training_config import training_config
 
 
@@ -28,6 +27,8 @@ def get_sdxl_dataset():
 
 @torch.no_grad()
 def make_sample(d):
+    from sdxl import vae
+
     image = d["image"]
     text = d["text"]
     metadata = d["json"]
@@ -100,6 +101,9 @@ def make_sample(d):
 
 @torch.no_grad()
 def text_conditioning(text):
+    from sdxl import (text_encoder_one, text_encoder_two, tokenizer_one,
+                      tokenizer_two)
+
     text_input_ids = tokenizer_one(
         text,
         padding="max_length",

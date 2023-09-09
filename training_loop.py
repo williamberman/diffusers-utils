@@ -5,14 +5,14 @@ from logging import getLogger
 
 import torch
 import torch.distributed as dist
-import wandb
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from sdxl import adapter, init_sdxl, sdxl_log_adapter_validation, sdxl_train_step
+import wandb
+from sdxl import init_sdxl, sdxl_log_adapter_validation, sdxl_train_step
 from sdxl_dataset import get_sdxl_dataset
 from training_config import training_config
 
@@ -36,6 +36,8 @@ def main():
 
     if training_config.training == "sdxl_adapter":
         init_sdxl()
+
+        from sdxl import adapter
 
         if training_config.adapter_type == "mediapipe_pose":
             from mediapipe_pose import init_mediapipe_pose
@@ -66,7 +68,7 @@ def main():
 
     progress_bar = tqdm(
         range(0, training_config.max_train_steps),
-        disable=dist.get_global_rank() != 0,
+        disable=dist.get_rank() != 0,
     )
 
     dataloader = DataLoader(
@@ -115,7 +117,7 @@ def main():
         global_step += 1
 
         if global_step % training_config.checkpointing_steps == 0:
-            if dist.get_global_rank() == 0:
+            if dist.get_rank() == 0:
                 save_checkpoint(
                     output_dir=training_config.output_dir,
                     checkpoints_total_limit=training_config.checkpoints_total_limit,
@@ -125,10 +127,7 @@ def main():
 
             dist.barrier()
 
-        if (
-            dist.get_global_rank() == 0
-            and global_step % training_config.validation_steps == 0
-        ):
+        if dist.get_rank() == 0 and global_step % training_config.validation_steps == 0:
             logger.info("Running validation... ")
 
             if training_config.training == "sdxl_adapter":
@@ -144,7 +143,7 @@ def main():
 
     dist.barrier()
 
-    if dist.get_global_rank() == 0:
+    if dist.get_rank() == 0:
         if training_config.training == "sdxl_adapter":
             adapter.module.save_pretrained(training_config.output_dir)
         else:
