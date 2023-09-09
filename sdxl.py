@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
-from .config import config
+from .training_config import config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 vae_repo = "madebyollin/sdxl-vae-fp16-fix"

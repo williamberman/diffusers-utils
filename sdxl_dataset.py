@@ -4,9 +4,9 @@ import webdataset as wds
 from torch.utils.data import default_collate
 from torchvision import transforms
 
-from .config import config
 from .sdxl import (text_encoder_one, text_encoder_two, tokenizer_one,
                    tokenizer_two, vae)
+from .training_config import config
 
 
 def get_sdxl_dataset():
@@ -70,7 +70,14 @@ def make_sample(d):
     }
 
     if config.training == "sdxl_adapter":
-        sample["adapter_image"] = None  # TODO
+        if config.adapter_type == "mediapipe_pose":
+            from .mediapipe_pose import mediapipe_pose_adapter_image
+
+            adapter_image = mediapipe_pose_adapter_image()
+        else:
+            assert False
+
+        sample["adapter_image"] = adapter_image
 
     return sample
 

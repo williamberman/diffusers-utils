@@ -1,24 +1,24 @@
 import logging
 import os
 import shutil
+from logging import getLogger
 
 import torch
 import torch.distributed as dist
 import wandb
-from accelerate.logging import get_logger
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .config import config
 from .sdxl import adapter, init_sdxl, log_adapter_validation, sdxl_train_step
 from .sdxl_dataset import get_sdxl_dataset
+from .training_config import config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-logger = get_logger(__name__)
+logger = getLogger(__name__)
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -36,6 +36,11 @@ def main():
 
     if config.training == "sdxl_adapter":
         init_sdxl()
+
+        if config.adapter_type == "mediapipe_pose":
+            from .mediapipe_pose import init_mediapipe_pose
+
+            init_mediapipe_pose()
     else:
         assert False
 

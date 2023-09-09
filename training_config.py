@@ -23,6 +23,7 @@ class Config:
     resolution: int
     batch_size: int
     training: Literal["sdxl_adapter"]
+    adapter_type: Optional[Literal["mediapipe_pose"]] = None
 
 
 yaml_config = yaml.safe_load(os.environ["DIFFUSERS_UTILS_CONFIG"])
