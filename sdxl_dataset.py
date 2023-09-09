@@ -4,8 +4,7 @@ import webdataset as wds
 from torch.utils.data import default_collate
 from torchvision import transforms
 
-from .sdxl import (text_encoder_one, text_encoder_two, tokenizer_one,
-                   tokenizer_two, vae)
+from .sdxl import text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae
 from .training_config import training_config
 
 

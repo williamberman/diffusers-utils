@@ -1,0 +1,3 @@
+output_dir: "/fsx/william/sdxl_t2i_mediapipe"
+training: "sdxl_adapter"
+adapter_type: "mediapipe_pose"

@@ -4,13 +4,16 @@ import torch
 import torch.distributed as dist
 import torch.functional as F
 import wandb
-from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
-                       StableDiffusionXLAdapterPipeline, T2IAdapter,
-                       UNet2DConditionModel)
+from diffusers import (
+    AutoencoderKL,
+    EulerDiscreteScheduler,
+    StableDiffusionXLAdapterPipeline,
+    T2IAdapter,
+    UNet2DConditionModel,
+)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
-                          CLIPTokenizerFast)
+from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizerFast
 
 from .training_config import training_config
 

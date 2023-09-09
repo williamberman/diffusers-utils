@@ -9,21 +9,24 @@ import yaml
 @dataclass
 class Config:
     output_dir: str
-    gradient_accumulation_steps: int
-    mixed_precision: Optional[torch.dtype] = None
-    resume_from: str
-    checkpointing_steps: int
-    checkpoints_total_limit: int
-    validation_steps: int
-    max_train_steps: int
-    validation_prompts: List[str]
-    num_validation_images: int
-    train_shards: str
-    shuffle_buffer_size: int
-    resolution: int
-    batch_size: int
     training: Literal["sdxl_adapter"]
+
+    # training: "sdxl_adapter"
     adapter_type: Optional[Literal["mediapipe_pose"]] = None
+
+    gradient_accumulation_steps: int = 1
+    mixed_precision: Optional[torch.dtype] = None
+    resume_from: Optional[str] = None
+    checkpointing_steps: int = 1000
+    checkpoints_total_limit: int = 5
+    validation_steps: int = 500
+    max_train_steps: int = 30_000
+    validation_prompts: Optional[List[str]] = None
+    num_validation_images: int = 2
+    train_shards: str = "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
+    shuffle_buffer_size: int = 1000
+    resolution: int = 1024
+    batch_size: int = 8
 
 
 yaml_config = yaml.safe_load(os.environ["DIFFUSERS_UTILS_CONFIG"])
