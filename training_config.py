@@ -41,4 +41,4 @@ elif yaml_config["mixed_precision"] == "bf16":
 else:
     assert False
 
-config: Config = Config(**yaml_config)
+training_config: Config = Config(**yaml_config)

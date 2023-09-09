@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from .sdxl import adapter, init_sdxl, log_adapter_validation, sdxl_train_step
 from .sdxl_dataset import get_sdxl_dataset
-from .training_config import config
+from .training_config import training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -28,23 +28,23 @@ logging.basicConfig(
 
 
 def main():
-    os.makedirs(config.output_dir, exist_ok=True)
+    os.makedirs(training_config.output_dir, exist_ok=True)
 
     wandb.init()
 
     dist.init_process_group("nccl")
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         init_sdxl()
 
-        if config.adapter_type == "mediapipe_pose":
+        if training_config.adapter_type == "mediapipe_pose":
             from .mediapipe_pose import init_mediapipe_pose
 
             init_mediapipe_pose()
     else:
         assert False
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         training_parameters = adapter.parameters()
         parameters_to_clip = adapter.parameters()
     else:
@@ -54,10 +54,10 @@ def main():
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
-    if config.resume_from is not None:
-        load_checkpoint(config.resume_from, optimizer=optimizer)
+    if training_config.resume_from is not None:
+        load_checkpoint(training_config.resume_from, optimizer=optimizer)
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         dataset = get_sdxl_dataset()
     else:
         assert False
@@ -65,7 +65,7 @@ def main():
     global_step = 0
 
     progress_bar = tqdm(
-        range(0, config.max_train_steps),
+        range(0, training_config.max_train_steps),
         disable=dist.get_global_rank() != 0,
     )
 
@@ -84,20 +84,20 @@ def main():
     while True:
         accumulated_loss = None
 
-        for _ in range(config.gradient_accumulation_steps):
+        for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
             with torch.autocast(
                 "cuda",
-                config.mixed_precision,
-                enabled=config.mixed_precision is not None,
+                training_config.mixed_precision,
+                enabled=training_config.mixed_precision is not None,
             ):
-                if config.training == "sdxl_adapter":
+                if training_config.training == "sdxl_adapter":
                     loss = sdxl_train_step(batch)
                 else:
                     assert False
 
-            loss = loss / config.gradient_accumulation_steps
+            loss = loss / training_config.gradient_accumulation_steps
             loss.backward()
 
             if accumulated_loss is None:
@@ -114,21 +114,21 @@ def main():
         progress_bar.update(1)
         global_step += 1
 
-        if global_step % config.checkpointing_steps == 0:
+        if global_step % training_config.checkpointing_steps == 0:
             if dist.get_global_rank() == 0:
                 save_checkpoint(
-                    output_dir=config.output_dir,
-                    checkpoints_total_limit=config.checkpoints_total_limit,
+                    output_dir=training_config.output_dir,
+                    checkpoints_total_limit=training_config.checkpoints_total_limit,
                     global_step=global_step,
                     optimizer=optimizer,
                 )
 
             dist.barrier()
 
-        if dist.get_global_rank() == 0 and global_step % config.validation_steps == 0:
+        if dist.get_global_rank() == 0 and global_step % training_config.validation_steps == 0:
             logger.info("Running validation... ")
 
-            if config.training == "sdxl_adapter":
+            if training_config.training == "sdxl_adapter":
                 log_adapter_validation(global_step)
             else:
                 assert False
@@ -136,14 +136,14 @@ def main():
         logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
         progress_bar.set_postfix(**logs)
 
-        if global_step >= config.max_train_steps:
+        if global_step >= training_config.max_train_steps:
             break
 
     dist.barrier()
 
     if dist.get_global_rank() == 0:
-        if config.training == "sdxl_adapter":
-            adapter.module.save_pretrained(config.output_dir)
+        if training_config.training == "sdxl_adapter":
+            adapter.module.save_pretrained(training_config.output_dir)
         else:
             assert False
 
@@ -171,7 +171,7 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         adapter.module.save_pretrained(output_dir, subfolder="adapter")
     else:
         assert False
@@ -184,7 +184,7 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 def load_checkpoint(resume_from, optimizer):
     optimizer.load(os.path.join(resume_from, "optimizer.bin"))
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         adapter_state_dict = torch.load(
             os.path.join(resume_from, "adapter", "pytorch_model.bin"),
             map_location=adapter.device,

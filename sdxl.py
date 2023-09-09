@@ -12,7 +12,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
-from .training_config import config
+from .training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 vae_repo = "madebyollin/sdxl-vae-fp16-fix"
@@ -72,7 +72,7 @@ def init_sdxl():
 
     scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         adapter = T2IAdapter(
             in_channels=3,
             channels=(320, 640, 1280, 1280),
@@ -106,7 +106,7 @@ def sdxl_train_step(batch):
     noise = torch.randn_like(latents)
     noisy_latents = scheduler.add_noise(latents, noise, timesteps)
 
-    if config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         down_block_additional_residuals = adapter(adapter_image)
     else:
         down_block_additional_residuals = None
@@ -153,22 +153,22 @@ def log_adapter_validation(step):
     output_validation_images = []
 
     for validation_prompt, validation_image in zip(
-        config.validation_prompts, validation_images
+        training_config.validation_prompts, validation_images
     ):
         with torch.autocast("cuda"):
             output_validation_images += pipeline(
                 prompt=validation_prompt,
                 image=validation_image,
-                num_images_per_prompt=config.num_validation_images,
+                num_images_per_prompt=training_config.num_validation_images,
                 adapter_conditioning_scale=1.5,
             ).images
 
-    for i, validation_prompt in enumerate(config.validation_prompts):
+    for i, validation_prompt in enumerate(training_config.validation_prompts):
         validation_image = validation_images[i]
 
         output_validation_images_ = output_validation_images[
-            i * config.num_validation_images : i * config.num_validation_images
-            + config.num_validation_images
+            i * training_config.num_validation_images : i * training_config.num_validation_images
+            + training_config.num_validation_images
         ]
 
         image_logs.append(
