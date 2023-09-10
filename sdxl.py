@@ -32,7 +32,7 @@ def init_sdxl():
     global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
 
     if _init_sdxl_called:
-        raise ValueError("`init_sdxl_models` called more than once")
+        raise ValueError("`init_sdxl` called more than once")
 
     _init_sdxl_called = True
 
