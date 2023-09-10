@@ -1,10 +1,10 @@
 import mediapipe as mp
 import numpy as np
+import torch
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from PIL import Image
 
 # General instructions: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/python
 #
@@ -14,7 +14,6 @@ from PIL import Image
 # `wget https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task -O pose_landmarker.task`
 
 detector = None
-
 _init_mediapipe_pose_called = False
 
 
@@ -22,7 +21,7 @@ def init_mediapipe_pose():
     global _init_mediapipe_pose_called, detector
 
     if _init_mediapipe_pose_called:
-        raise ValueError("init_mediapipe_pose() called twice")
+        return
 
     _init_mediapipe_pose_called = True
 
@@ -34,7 +33,9 @@ def init_mediapipe_pose():
 
 
 def mediapipe_pose_adapter_image(numpy_image):
-    height, width = numpy_image.shape[-2]
+    init_mediapipe_pose()
+
+    height, width = numpy_image.shape[:2]
 
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=numpy_image)
 
@@ -48,7 +49,10 @@ def mediapipe_pose_adapter_image(numpy_image):
     pose = np.zeros((height, width, 3), dtype=np.uint8)
     draw_landmarks_on_image(pose, pose_landmarks)
 
-    pose = Image.fromarray(pose)
+    pose = torch.tensor(pose)
+    pose = pose.permute(2, 0, 1)
+    pose = pose.float()
+    pose = pose / 255.0
 
     return pose
 

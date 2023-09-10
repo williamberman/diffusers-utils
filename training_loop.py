@@ -74,7 +74,6 @@ def main():
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=8,
-        worker_init_fn=dataloader_worker_init_fn,
     )
 
     dataloader = iter(dataloader)
@@ -85,15 +84,10 @@ def main():
         for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
-            with torch.autocast(
-                "cuda",
-                training_config.mixed_precision,
-                enabled=training_config.mixed_precision is not None,
-            ):
-                if training_config.training == "sdxl_adapter":
-                    loss = sdxl_train_step(batch)
-                else:
-                    assert False
+            if training_config.training == "sdxl_adapter":
+                loss = sdxl_train_step(batch)
+            else:
+                assert False
 
             loss = loss / training_config.gradient_accumulation_steps
             loss.backward()
@@ -194,13 +188,6 @@ def load_checkpoint(resume_from, optimizer):
         adapter.load_state_dict(adapter_state_dict)
     else:
         assert False
-
-
-def dataloader_worker_init_fn(worker_id):
-    if training_config.adapter_type == "mediapipe_pose":
-        from mediapipe_pose import init_mediapipe_pose
-
-        init_mediapipe_pose()
 
 
 if __name__ == "__main__":
