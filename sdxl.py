@@ -185,6 +185,7 @@ tokenizer_two = CLIPTokenizerFast.from_pretrained(
 @torch.no_grad()
 def sdxl_log_adapter_validation(step):
     adapter_ = adapter.module
+    adapter_.eval()
 
     pipeline = StableDiffusionXLAdapterPipeline(
         vae=vae,
@@ -221,3 +222,5 @@ def sdxl_log_adapter_validation(step):
     ]
 
     wandb.log({"validation": output_validation_images}, step=step)
+
+    adapter_.train()
