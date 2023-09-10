@@ -26,6 +26,7 @@ adapter: T2IAdapter = None
 
 _init_sdxl_called = False
 
+repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
 def init_sdxl():
     global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
@@ -36,8 +37,6 @@ def init_sdxl():
     _init_sdxl_called = True
 
     device_id = dist.get_rank()
-
-    repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
     text_encoder_one = CLIPTextModel.from_pretrained(
         repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16
@@ -186,6 +185,10 @@ tokenizer_two = CLIPTokenizerFast.from_pretrained(
 def sdxl_log_adapter_validation(step):
     adapter_ = adapter.module
     adapter_.eval()
+
+    # NOTE - this has to be different from the module level scheduler because
+    # the pipeline mutates it.
+    scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
     pipeline = StableDiffusionXLAdapterPipeline(
         vae=vae,
