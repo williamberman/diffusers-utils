@@ -26,6 +26,13 @@ logging.basicConfig(
 
 
 def main():
+    dist.init_process_group("nccl")
+
+    if dist.get_rank() == 0:
+        os.makedirs(training_config.output_dir, exist_ok=True)
+
+        wandb.init()
+
     if training_config.training == "sdxl_adapter":
         from sdxl import init_sdxl
 
@@ -62,12 +69,6 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    os.makedirs(training_config.output_dir, exist_ok=True)
-
-    wandb.init()
-
-    dist.init_process_group("nccl")
-
     optimizer = AdamW(training_parameters, lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
