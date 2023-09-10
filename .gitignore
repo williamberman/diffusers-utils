@@ -161,3 +161,4 @@ cython_debug/
 
 wandb/
 pose_landmarker.task
+output/
