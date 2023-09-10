@@ -1,5 +1,6 @@
-output_dir: "/fsx/william/sdxl_t2i_mediapipe"
+output_dir: "./output/sdxl_t2i_mediapipe"
 training: "sdxl_adapter"
 adapter_type: "mediapipe_pose"
 mixed_precision: fp16
 batch_size: 8
+train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"

@@ -10,6 +10,7 @@ import yaml
 class Config:
     output_dir: str
     training: Literal["sdxl_adapter"]
+    train_shards: str
 
     # training: "sdxl_adapter"
     adapter_type: Optional[Literal["mediapipe_pose"]] = None
@@ -23,7 +24,6 @@ class Config:
     max_train_steps: int = 30_000
     validation_prompts: Optional[List[str]] = None
     num_validation_images: int = 2
-    train_shards: str = "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
     shuffle_buffer_size: int = 1000
     resolution: int = 1024
     batch_size: int = 8
