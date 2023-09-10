@@ -12,8 +12,6 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
-from sdxl import init_sdxl, sdxl_log_adapter_validation, sdxl_train_step
-from sdxl_dataset import get_sdxl_dataset
 from training_config import training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -28,24 +26,47 @@ logging.basicConfig(
 
 
 def main():
+    if training_config.training == "sdxl_adapter":
+        from sdxl import init_sdxl
+
+        init_sdxl()
+
+        from sdxl import adapter, sdxl_log_adapter_validation, sdxl_train_step
+        from sdxl_dataset import get_sdxl_dataset
+
+        training_parameters = adapter.parameters()
+        parameters_to_clip = adapter.parameters()
+        dataset = get_sdxl_dataset()
+        log_validation = sdxl_log_adapter_validation
+        train_step = sdxl_train_step
+    else:
+        assert False
+
+    training_loop(
+        training_parameters=training_parameters,
+        parameters_to_clip=parameters_to_clip,
+        dataset=dataset,
+        log_validation=log_validation,
+        train_step=train_step,
+    )
+
+    dist.barrier()
+
+    if dist.get_rank() == 0:
+        if training_config.training == "sdxl_adapter":
+            adapter.module.save_pretrained(training_config.output_dir)
+        else:
+            assert False
+
+
+def training_loop(
+    training_parameters, parameters_to_clip, dataset, log_validation, train_step
+):
     os.makedirs(training_config.output_dir, exist_ok=True)
 
     wandb.init()
 
     dist.init_process_group("nccl")
-
-    if training_config.training == "sdxl_adapter":
-        init_sdxl()
-
-        from sdxl import adapter
-    else:
-        assert False
-
-    if training_config.training == "sdxl_adapter":
-        training_parameters = adapter.parameters()
-        parameters_to_clip = adapter.parameters()
-    else:
-        assert False
 
     optimizer = AdamW(training_parameters, lr=1e-5)
 
@@ -53,11 +74,6 @@ def main():
 
     if training_config.resume_from is not None:
         load_checkpoint(training_config.resume_from, optimizer=optimizer)
-
-    if training_config.training == "sdxl_adapter":
-        dataset = get_sdxl_dataset()
-    else:
-        assert False
 
     global_step = 0
 
@@ -85,7 +101,7 @@ def main():
             batch = next(dataloader)
 
             if training_config.training == "sdxl_adapter":
-                loss = sdxl_train_step(batch)
+                loss = train_step(batch)
             else:
                 assert False
 
@@ -121,7 +137,7 @@ def main():
             logger.info("Running validation... ")
 
             if training_config.training == "sdxl_adapter":
-                sdxl_log_adapter_validation(global_step)
+                log_validation(global_step)
             else:
                 assert False
 
@@ -130,14 +146,6 @@ def main():
 
         if global_step >= training_config.max_train_steps:
             break
-
-    dist.barrier()
-
-    if dist.get_rank() == 0:
-        if training_config.training == "sdxl_adapter":
-            adapter.module.save_pretrained(training_config.output_dir)
-        else:
-            assert False
 
 
 def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer):
