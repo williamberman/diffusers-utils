@@ -28,6 +28,7 @@ _init_sdxl_called = False
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
+
 def init_sdxl():
     global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
 
