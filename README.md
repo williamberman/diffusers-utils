@@ -7,7 +7,7 @@ DIFFUSERS_UTILS_TRAINING_CONFIG="<path to config file>" torchrun --standalone --
 Single Machine, Multiple GPUs
 
 ```sh
-DIFFUSERS_UTILS_TRAINING_CONFIG="<path to config file>" torchrun --standalone --nproc_per_node=8 training_loop.py
+DIFFUSERS_UTILS_TRAINING_CONFIG="<path to config file>" torchrun --standalone --nproc_per_node=<number of gpus> training_loop.py
 ```
 
 Multiple Machines, Multiple GPUs
