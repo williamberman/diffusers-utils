@@ -29,12 +29,12 @@ class Config:
     batch_size: int = 8
 
 
-if "CONFIG" not in os.environ:
+if "DIFFUSERS_UTILS_TRAINING_CONFIG" not in os.environ:
     raise ValueError(
-        "Must set environment variable `CONFIG` to path to the yaml config to use for the training run."
+        "Must set environment variable `DIFFUSERS_UTILS_TRAINING_CONFIG` to path to the yaml config to use for the training run."
     )
 
-with open(os.environ["CONFIG"], "r") as f:
+with open(os.environ["DIFFUSERS_UTILS_TRAINING_CONFIG"], "r") as f:
     yaml_config = yaml.safe_load(f.read())
 
 if (
