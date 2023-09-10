@@ -8,25 +8,34 @@ import yaml
 
 @dataclass
 class Config:
+    # required config
     output_dir: str
     training: Literal["sdxl_adapter"]
     train_shards: str
 
-    # training: "sdxl_adapter"
+    # set adapter type if `training_config.training == "sdxl_adapter"`
     adapter_type: Optional[Literal["mediapipe_pose"]] = None
 
+    # core training config
     gradient_accumulation_steps: int = 1
     mixed_precision: Optional[torch.dtype] = None
+    batch_size: int = 8
+    max_train_steps: int = 30_000
     resume_from: Optional[str] = None
+
+    # data config
+    resolution: int = 1024
+    shuffle_buffer_size: int = 1000
+
+    # validation
+    validation_steps: int = 500
+    num_validation_images: int = 2
+    validation_prompts: Optional[List[str]] = None
+    validation_images: Optional[List[str]] = None
+
+    # checkpointing
     checkpointing_steps: int = 1000
     checkpoints_total_limit: int = 5
-    validation_steps: int = 500
-    max_train_steps: int = 30_000
-    validation_prompts: Optional[List[str]] = None
-    num_validation_images: int = 2
-    shuffle_buffer_size: int = 1000
-    resolution: int = 1024
-    batch_size: int = 8
 
 
 if "DIFFUSERS_UTILS_TRAINING_CONFIG" not in os.environ:
@@ -51,3 +60,7 @@ else:
     assert False
 
 training_config: Config = Config(**yaml_config)
+
+if training_config.training == "sdxl_adapter":
+    if training_config.adapter_type is None:
+        raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
