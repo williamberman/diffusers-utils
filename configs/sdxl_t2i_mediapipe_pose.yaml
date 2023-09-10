@@ -4,3 +4,14 @@ adapter_type: "mediapipe_pose"
 mixed_precision: fp16
 batch_size: 8
 train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
+validation_steps: 1
+validation_images:
+- ./sdxl_t2i_mediapipe_pose_validation/0.png
+- ./sdxl_t2i_mediapipe_pose_validation/1.png
+- ./sdxl_t2i_mediapipe_pose_validation/2.png
+- ./sdxl_t2i_mediapipe_pose_validation/3.png
+validation_prompts:
+- "superman"
+- "spiderman"
+- "elon musk"
+- "jerry seinfeld"

@@ -1,5 +1,3 @@
-import os
-
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -8,7 +6,8 @@ from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
                        UNet2DConditionModel)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import CLIPTextModel, CLIPTextModelWithProjection
+from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
+                          CLIPTokenizerFast)
 
 import wandb
 from training_config import training_config
@@ -174,6 +173,15 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
     return prompt_embeds, pooled_prompt_embeds_2
 
 
+tokenizer_one = CLIPTokenizerFast.from_pretrained(
+    "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer"
+)
+
+tokenizer_two = CLIPTokenizerFast.from_pretrained(
+    "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2"
+)
+
+
 @torch.no_grad()
 def sdxl_log_adapter_validation(step):
     adapter_ = adapter.module
@@ -185,63 +193,31 @@ def sdxl_log_adapter_validation(step):
         unet=unet,
         adapter=adapter_,
         scheduler=scheduler,
+        tokenizer=tokenizer_one,
+        tokenizer_2=tokenizer_two,
     )
 
     pipeline.set_progress_bar_config(disable=True)
 
-    validation_images = [
-        os.path.join(validation_image, f"{i}.png")
-        for i in range(len(validation_prompt))
+    formatted_validation_images = []
+
+    for validation_image in training_config.validation_images:
+        validation_image = Image.open(validation_image)
+        validation_image = validation_image.convert("RGB")
+        validation_image = validation_image.resize(
+            (training_config.resolution, training_config.resolution)
+        )
+        formatted_validation_images.append(validation_image)
+
+    with torch.autocast("cuda"):
+        output_validation_images = pipeline(
+            prompt=training_config.validation_prompts,
+            image=formatted_validation_images,
+            num_images_per_prompt=training_config.num_validation_images,
+        ).images
+
+    output_validation_images = [
+        wandb.Image(image) for image in output_validation_images
     ]
 
-    validation_images = [Image.open(x).convert("RGB") for x in validation_images]
-
-    image_logs = []
-
-    output_validation_images = []
-
-    for validation_prompt, validation_image in zip(
-        training_config.validation_prompts, validation_images
-    ):
-        with torch.autocast("cuda"):
-            output_validation_images += pipeline(
-                prompt=validation_prompt,
-                image=validation_image,
-                num_images_per_prompt=training_config.num_validation_images,
-                adapter_conditioning_scale=1.5,
-            ).images
-
-    for i, validation_prompt in enumerate(training_config.validation_prompts):
-        validation_image = validation_images[i]
-
-        output_validation_images_ = output_validation_images[
-            i
-            * training_config.num_validation_images : i
-            * training_config.num_validation_images
-            + training_config.num_validation_images
-        ]
-
-        image_logs.append(
-            {
-                "validation_image": validation_image,
-                "images": output_validation_images_,
-                "validation_prompt": validation_prompt,
-            }
-        )
-
-    formatted_images = []
-
-    for log in image_logs:
-        images = log["images"]
-        validation_prompt = log["validation_prompt"]
-        validation_image = log["validation_image"]
-
-        formatted_images.append(
-            wandb.Image(validation_image, caption="adapter conditioning")
-        )
-
-        for image in images:
-            image = wandb.Image(image, caption=validation_prompt)
-            formatted_images.append(image)
-
-    wandb.log({"validation": formatted_images}, step=step)
+    wandb.log({"validation": output_validation_images}, step=step)
