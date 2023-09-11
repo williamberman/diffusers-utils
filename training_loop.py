@@ -151,9 +151,10 @@ def training_loop(
             logger.info("Running validation... ")
             log_validation(global_step)
 
-        logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
-        progress_bar.set_postfix(**logs)
-        wandb.log(logs, step=global_step)
+        if dist.get_rank() == 0:
+            logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
+            progress_bar.set_postfix(**logs)
+            wandb.log(logs, step=global_step)
 
         if global_step >= training_config.max_train_steps:
             break
