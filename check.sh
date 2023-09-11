@@ -2,6 +2,6 @@
 
 set -e
 
-mypy *.py
 black *.py
 isort *.py
+mypy *.py
