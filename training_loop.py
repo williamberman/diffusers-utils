@@ -6,13 +6,14 @@ from logging import getLogger
 import torch
 import torch.distributed as dist
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
 from training_config import training_config
+
+from bitsandbytes.optim import AdamW8bit
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -85,7 +86,7 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    optimizer = AdamW(training_parameters, lr=1e-5)
+    optimizer = AdamW8bit(training_parameters, lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
