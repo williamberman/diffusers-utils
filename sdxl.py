@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import webdataset as wds
