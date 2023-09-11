@@ -326,6 +326,8 @@ def sdxl_log_unet_validation(step):
 
     pipeline.set_progress_bar_config(disable=True)
 
+    generator = torch.Generator().manual_seed(0)
+
     output_validation_images = []
 
     for validation_prompt in training_config.validation_prompts:
@@ -333,6 +335,7 @@ def sdxl_log_unet_validation(step):
             with torch.autocast("cuda"):
                 output_validation_images += pipeline(
                     prompt=validation_prompt,
+                    generator=generator,
                 ).images
 
     output_validation_images = [
@@ -376,6 +379,8 @@ def sdxl_log_adapter_validation(step):
         )
         formatted_validation_images.append(validation_image)
 
+    generator = torch.Generator().manual_seed(0)
+
     output_validation_images = []
 
     for validation_prompt, validation_image in zip(
@@ -386,6 +391,7 @@ def sdxl_log_adapter_validation(step):
                 output_validation_images += pipeline(
                     prompt=validation_prompt,
                     image=validation_image,
+                    generator=generator,
                 ).images
 
     output_validation_images = [
