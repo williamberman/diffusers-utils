@@ -1,4 +1,5 @@
 import os
+import random
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -129,8 +130,12 @@ def get_sdxl_dataset():
 @torch.no_grad()
 def make_sample(d):
     image = d["image"]
-    text = d["text"]
     metadata = d["metadata"]
+
+    if random.random() < training_config.proportion_empty_prompts:
+        text = ""
+    else:
+        text = d["text"]
 
     image = image.convert("RGB")
 

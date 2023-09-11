@@ -26,6 +26,7 @@ class Config:
     # data config
     resolution: int = 1024
     shuffle_buffer_size: int = 1000
+    proportion_empty_prompts: float = 0.1
 
     # validation
     validation_steps: int = 500
