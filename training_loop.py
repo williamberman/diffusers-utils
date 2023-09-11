@@ -116,7 +116,7 @@ def training_loop(
         for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
-            loss = train_step(batch)
+            loss = train_step(batch=batch, global_step=global_step)
 
             loss = loss / training_config.gradient_accumulation_steps
             loss.backward()

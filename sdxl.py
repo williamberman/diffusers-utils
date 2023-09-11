@@ -215,12 +215,14 @@ def adapter_image_is_not_none(sample):
     return sample["adapter_image"] is not None
 
 
-def sdxl_train_step(batch):
+def sdxl_train_step(batch, global_step):
     with torch.no_grad():
-        time_ids = batch["time_ids"].to(device_id)
+        unet_dtype = maybe_ddp_dtype(unet)
+
+        time_ids = batch["time_ids"].to(device=device_id)
 
         image = batch["image"].to(device_id, dtype=vae.dtype)
-        latents = vae.encode(image).latent_dist.sample()
+        latents = vae.encode(image).latent_dist.sample().to(dtype=unet_dtype)
 
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
@@ -229,7 +231,6 @@ def sdxl_train_step(batch):
             text_input_ids_one, text_input_ids_two
         )
 
-        unet_dtype = maybe_ddp_dtype(unet)
         prompt_embeds = prompt_embeds.to(dtype=unet_dtype)
         pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet_dtype)
 
@@ -249,7 +250,7 @@ def sdxl_train_step(batch):
 
         sigmas = get_sigmas(timesteps)
         sigmas = sigmas.to(device=noisy_latents.device, dtype=noisy_latents.dtype)
-        noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
+        scaled_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
 
     with torch.autocast(
         "cuda",
@@ -263,7 +264,7 @@ def sdxl_train_step(batch):
             down_block_additional_residuals = None
 
         model_pred = unet(
-            noisy_latents,
+            scaled_noisy_latents,
             timesteps,
             encoder_hidden_states=prompt_embeds,
             added_cond_kwargs={
@@ -309,7 +310,7 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
 
 @torch.no_grad()
 def sdxl_log_unet_validation(step):
-    unet_ = unet.module
+    unet_ = maybe_ddp_module(unet)
     unet_.eval()
 
     # NOTE - this has to be different from the module level scheduler because
@@ -351,7 +352,7 @@ def sdxl_log_unet_validation(step):
 
 @torch.no_grad()
 def sdxl_log_adapter_validation(step):
-    adapter_ = adapter.module
+    adapter_ = maybe_ddp_module(adapter)
     adapter_.eval()
 
     # NOTE - this has to be different from the module level scheduler because
@@ -423,3 +424,8 @@ def maybe_ddp_dtype(m):
     if isinstance(m, DDP):
         m = m.module
     return m.dtype
+
+def maybe_ddp_module(m):
+    if isinstance(m, DDP):
+        m = m.module
+    return m
