@@ -84,7 +84,7 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    optimizer = AdamW8bit(training_parameters, lr=1e-7)
+    optimizer = AdamW8bit(training_parameters, lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 

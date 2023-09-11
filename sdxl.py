@@ -41,7 +41,7 @@ _init_sdxl_called = False
 
 
 def init_sdxl():
-    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler
+    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
 
     if _init_sdxl_called:
         raise ValueError("`init_sdxl` called more than once")
@@ -104,7 +104,7 @@ def init_sdxl():
 
 
 def get_sdxl_dataset():
-    return (
+    dataset = (
         wds.WebDataset(training_config.train_shards, resampled=True)
         .shuffle(training_config.shuffle_buffer_size)
         .decode("pil", handler=wds.ignore_and_continue)
@@ -115,10 +115,16 @@ def get_sdxl_dataset():
             handler=wds.warn_and_continue,
         )
         .map(make_sample)
-        .batched(
-            training_config.batch_size, partial=False, collation_fn=default_collate
-        )
     )
+
+    if training_config.training == "sdxl_adapter":
+        dataset = dataset.select(adapter_image_is_not_none)
+
+    dataset = dataset.batched(
+        training_config.batch_size, partial=False, collation_fn=default_collate
+    )
+
+    return dataset
 
 
 @torch.no_grad()
@@ -201,6 +207,10 @@ def make_sample(d):
     return sample
 
 
+def adapter_image_is_not_none(sample):
+    return sample["adapter_image"] is not None
+
+
 def sdxl_train_step(batch):
     device_id = dist.get_rank()
 
@@ -216,8 +226,10 @@ def sdxl_train_step(batch):
         prompt_embeds, pooled_prompt_embeds_two = text_conditioning(
             text_input_ids_one, text_input_ids_two
         )
-        prompt_embeds = prompt_embeds.to(dtype=unet.module.dtype)
-        pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet.module.dtype)
+
+        unet_dtype = maybe_ddp_dtype(unet)
+        prompt_embeds = prompt_embeds.to(dtype=unet_dtype)
+        pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet_dtype)
 
         bsz = latents.shape[0]
 
@@ -386,8 +398,8 @@ def sdxl_log_adapter_validation(step):
 
 
 def get_sigmas(timesteps, n_dim=4):
-    sigmas = scheduler.sigmas
-    schedule_timesteps = scheduler.timesteps
+    sigmas = scheduler.sigmas.to(device=timesteps.device)
+    schedule_timesteps = scheduler.timesteps.to(device=timesteps.device)
 
     step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
 
@@ -397,3 +409,9 @@ def get_sigmas(timesteps, n_dim=4):
         sigma = sigma.unsqueeze(-1)
 
     return sigma
+
+
+def maybe_ddp_dtype(m):
+    if isinstance(m, DDP):
+        m = m.module
+    return m.dtype
