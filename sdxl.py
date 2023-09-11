@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -30,7 +31,6 @@ scheduler: EulerDiscreteScheduler = None
 
 adapter: T2IAdapter = None
 
-
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
 tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
@@ -38,6 +38,8 @@ tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
 tokenizer_two = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer_2")
 
 _init_sdxl_called = False
+
+device_id = int(os.environ['LOCAL_RANK'])
 
 
 def init_sdxl():
@@ -47,8 +49,6 @@ def init_sdxl():
         raise ValueError("`init_sdxl` called more than once")
 
     _init_sdxl_called = True
-
-    device_id = dist.get_rank()
 
     text_encoder_one = CLIPTextModel.from_pretrained(
         repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16
@@ -212,8 +212,6 @@ def adapter_image_is_not_none(sample):
 
 
 def sdxl_train_step(batch):
-    device_id = dist.get_rank()
-
     with torch.no_grad():
         time_ids = batch["time_ids"].to(device_id)
 

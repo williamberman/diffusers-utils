@@ -23,6 +23,5 @@ DIFFUSERS_UTILS_TRAINING_CONFIG="<path to config file>" sbatch \
     --nodes=<number of nodes> \
     --partition=<production-cluster or dev-cluster> \
     --output=<log file> \
-    --job-name=<optional job name> \
     training_loop.slurm
 ```
