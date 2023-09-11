@@ -139,7 +139,7 @@ def sdxl_train_step(batch):
             down_block_additional_residuals=down_block_additional_residuals,
         ).sample
 
-        loss = F.mse_loss(model_pred.float(), noise, reduction="mean")
+        loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
 
     return loss
 
