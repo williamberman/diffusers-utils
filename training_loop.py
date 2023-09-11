@@ -33,19 +33,33 @@ def main():
 
         wandb.init()
 
-    if training_config.training == "sdxl_adapter":
-        from sdxl import init_sdxl
+    if training_config.training == "sdxl_unet":
+        from sdxl import init_sdxl_unet
 
-        init_sdxl()
+        init_sdxl_unet()
 
-        from sdxl import adapter, sdxl_log_adapter_validation, sdxl_train_step
-        from sdxl_dataset import get_sdxl_dataset
+        from sdxl import sdxl_log_unet_validation, sdxl_unet_train_step, unet
+        from sdxl_dataset import get_sdxl_unet_dataset
+
+        training_parameters = unet.parameters()
+        parameters_to_clip = unet.parameters()
+        dataset = get_sdxl_unet_dataset()
+        log_validation = sdxl_log_unet_validation
+        train_step = sdxl_unet_train_step
+    elif training_config.training == "sdxl_adapter":
+        from sdxl import init_sdxl_adapter
+
+        init_sdxl_adapter()
+
+        from sdxl import (adapter, sdxl_adapter_train_step,
+                          sdxl_log_adapter_validation)
+        from sdxl_dataset import get_sdxl_adapter_dataset
 
         training_parameters = adapter.parameters()
         parameters_to_clip = adapter.parameters()
-        dataset = get_sdxl_dataset()
+        dataset = get_sdxl_adapter_dataset()
         log_validation = sdxl_log_adapter_validation
-        train_step = sdxl_train_step
+        train_step = sdxl_adapter_train_step
     else:
         assert False
 
@@ -60,7 +74,9 @@ def main():
     dist.barrier()
 
     if dist.get_rank() == 0:
-        if training_config.training == "sdxl_adapter":
+        if training_config.training == "sdxl_unet":
+            unet.module.save_pretrained(training_config.output_dir)
+        elif training_config.training == "sdxl_adapter":
             adapter.module.save_pretrained(training_config.output_dir)
         else:
             assert False
@@ -101,10 +117,7 @@ def training_loop(
         for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
-            if training_config.training == "sdxl_adapter":
-                loss = train_step(batch)
-            else:
-                assert False
+            loss = train_step(batch)
 
             loss = loss / training_config.gradient_accumulation_steps
             loss.backward()
@@ -136,11 +149,7 @@ def training_loop(
 
         if dist.get_rank() == 0 and global_step % training_config.validation_steps == 0:
             logger.info("Running validation... ")
-
-            if training_config.training == "sdxl_adapter":
-                log_validation(global_step)
-            else:
-                assert False
+            log_validation(global_step)
 
         logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
         progress_bar.set_postfix(**logs)

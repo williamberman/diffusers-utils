@@ -1,0 +1,11 @@
+output_dir: "./output/sdxl_unet"
+training: "sdxl_unet"
+mixed_precision: fp16
+batch_size: 2
+train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
+validation_steps: 100
+validation_prompts:
+- "superman"
+- "spiderman"
+- "elon musk"
+- "jerry seinfeld"

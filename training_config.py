@@ -10,7 +10,7 @@ import yaml
 class Config:
     # required config
     output_dir: str
-    training: Literal["sdxl_adapter"]
+    training: Literal["sdxl_adapter", "sdxl_unet"]
     train_shards: str
 
     # set adapter type if `training_config.training == "sdxl_adapter"`

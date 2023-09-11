@@ -9,7 +9,7 @@ from transformers import CLIPTokenizerFast
 from training_config import training_config
 
 
-def get_sdxl_dataset():
+def get_sdxl_unet_dataset():
     return (
         wds.WebDataset(training_config.train_shards, resampled=True)
         .shuffle(training_config.shuffle_buffer_size)
@@ -21,7 +21,28 @@ def get_sdxl_dataset():
             handler=wds.warn_and_continue,
         )
         .map(make_sample)
-        .select(select)
+        .map(select_keys)
+        .batched(
+            training_config.batch_size, partial=False, collation_fn=default_collate
+        )
+    )
+
+
+def get_sdxl_adapter_dataset():
+    return (
+        wds.WebDataset(training_config.train_shards, resampled=True)
+        .shuffle(training_config.shuffle_buffer_size)
+        .decode("pil", handler=wds.ignore_and_continue)
+        .rename(
+            image="jpg;png;jpeg;webp",
+            text="text;txt;caption",
+            metadata="json",
+            handler=wds.warn_and_continue,
+        )
+        .map(make_sample)
+        .map(make_mediapipe_pose_adapter_image)
+        .select(select_not_none_adapter_images)
+        .map(select_adapter_keys)
         .batched(
             training_config.batch_size, partial=False, collation_fn=default_collate
         )
@@ -98,36 +119,49 @@ def make_sample(d):
         return_tensors="pt",
     ).input_ids[0]
 
-    sample = {
+    return {
         "time_ids": time_ids,
         "text_input_ids_one": text_input_ids_one,
         "text_input_ids_two": text_input_ids_two,
         "image": resized_and_cropped_and_normalized_image_tensor,
+        # required for mediapipe pose adapter
+        "resized_and_cropped_image": resized_and_cropped_image,
     }
 
-    if training_config.training == "sdxl_adapter":
-        if training_config.adapter_type == "mediapipe_pose":
-            from mediapipe_pose import mediapipe_pose_adapter_image
 
-            adapter_image = mediapipe_pose_adapter_image(
-                np.array(resized_and_cropped_image)
-            )
+def make_mediapipe_pose_adapter_image(sample):
+    from mediapipe_pose import mediapipe_pose_adapter_image
 
-            sample["adapter_image"] = adapter_image
-        else:
-            assert False
-    else:
-        assert False
+    resized_and_cropped_image = sample["resized_and_cropped_image"]
+    resized_and_cropped_image = np.array(resized_and_cropped_image)
+
+    adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image)
+
+    sample["adapter_image"] = adapter_image
 
     return sample
 
 
-def select(sample):
-    if training_config.training == "sdxl_adapter":
-        if training_config.adapter_type == "mediapipe_pose":
-            return sample["adapter_image"] is not None
-        else:
-            assert False
+def select_not_none_adapter_images(sample):
+    return sample["adapter_image"] is not None
 
-    else:
-        assert False
+
+def select_keys(sample):
+    return {
+        "time_ids": sample["time_ids"],
+        "time_ids": sample["time_ids"],
+        "text_input_ids_one": sample["text_input_ids_one"],
+        "text_input_ids_two": sample["text_input_ids_two"],
+        "image": sample["image"],
+    }
+
+
+def select_adapter_keys(sample):
+    return {
+        "time_ids": sample["time_ids"],
+        "time_ids": sample["time_ids"],
+        "text_input_ids_one": sample["text_input_ids_one"],
+        "text_input_ids_two": sample["text_input_ids_two"],
+        "image": sample["image"],
+        "adapter_image": sample["adapter_image"],
+    }
