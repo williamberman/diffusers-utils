@@ -185,10 +185,12 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
 
+    os.makedirs(save_path, exist_ok=True)
+
     if training_config.training == "sdxl_adapter":
         from sdxl import adapter
 
-        adapter.module.save_pretrained(output_dir, subfolder="adapter")
+        adapter.module.save_pretrained(save_path, subfolder="adapter")
     else:
         assert False
 
