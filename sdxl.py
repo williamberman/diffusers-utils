@@ -1,12 +1,17 @@
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
+import webdataset as wds
 from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
                        StableDiffusionXLPipeline, T2IAdapter,
                        UNet2DConditionModel)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import default_collate
+from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
@@ -28,16 +33,20 @@ adapter: T2IAdapter = None
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
-_init_sdxl_unet_called = False
+tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
+
+tokenizer_two = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer_2")
+
+_init_sdxl_called = False
 
 
-def init_sdxl_unet():
-    global _init_sdxl_unet_called, vae, text_encoder_one, text_encoder_two, unet, scheduler
+def init_sdxl():
+    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler
 
-    if _init_sdxl_unet_called:
-        raise ValueError("`init_sdxl_unet` called more than once")
+    if _init_sdxl_called:
+        raise ValueError("`init_sdxl` called more than once")
 
-    _init_sdxl_unet_called = True
+    _init_sdxl_called = True
 
     device_id = dist.get_rank()
 
@@ -69,72 +78,130 @@ def init_sdxl_unet():
         subfolder="unet",
     )
     unet.to(device=device_id)
-    unet.requires_grad_(True)
-    unet.train()
-    unet.enable_xformers_memory_efficient_attention()
-    unet = DDP(unet, device_ids=[device_id])
-
-
-_init_sdxl_adapter_called = False
-
-
-def init_sdxl_adapter():
-    global _init_sdxl_adapter_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
-
-    if _init_sdxl_adapter_called:
-        raise ValueError("`init_sdxl_adapter` called more than once")
-
-    _init_sdxl_adapter_called = True
-
-    device_id = dist.get_rank()
-
-    text_encoder_one = CLIPTextModel.from_pretrained(
-        repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16
-    )
-    text_encoder_one.to(device=device_id)
-    text_encoder_one.requires_grad_(False)
-    text_encoder_one.eval()
-
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(
-        repo, subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16
-    )
-    text_encoder_two.to(device=device_id)
-    text_encoder_two.requires_grad_(False)
-    text_encoder_two.eval()
-
-    unet = UNet2DConditionModel.from_pretrained(
-        repo,
-        subfolder="unet",
-    )
-    unet.to(device=device_id)
-    unet.requires_grad_(False)
-    unet.eval()
     unet.enable_xformers_memory_efficient_attention()
 
-    vae = AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
+    if training_config.training == "sdxl_unet":
+        unet.requires_grad_(True)
+        unet.train()
+        unet = DDP(unet, device_ids=[device_id])
+    else:
+        unet.requires_grad_(False)
+        unet.eval()
+
+    if training_config.training == "sdxl_adapter":
+        adapter = T2IAdapter(
+            in_channels=3,
+            channels=(320, 640, 1280, 1280),
+            num_res_blocks=2,
+            downscale_factor=16,
+            adapter_type="full_adapter_xl",
+        )
+        adapter.to(device=device_id)
+        adapter.train()
+        adapter.requires_grad_(True)
+        adapter.enable_xformers_memory_efficient_attention()
+        adapter = DDP(adapter, device_ids=[device_id])
+
+
+def get_sdxl_dataset():
+    return (
+        wds.WebDataset(training_config.train_shards, resampled=True)
+        .shuffle(training_config.shuffle_buffer_size)
+        .decode("pil", handler=wds.ignore_and_continue)
+        .rename(
+            image="jpg;png;jpeg;webp",
+            text="text;txt;caption",
+            metadata="json",
+            handler=wds.warn_and_continue,
+        )
+        .map(make_sample)
+        .batched(
+            training_config.batch_size, partial=False, collation_fn=default_collate
+        )
     )
-    vae.to(device=device_id)
-    vae.requires_grad_(False)
-    vae.eval()
 
-    scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
-    adapter = T2IAdapter(
-        in_channels=3,
-        channels=(320, 640, 1280, 1280),
-        num_res_blocks=2,
-        downscale_factor=16,
-        adapter_type="full_adapter_xl",
+@torch.no_grad()
+def make_sample(d):
+    image = d["image"]
+    text = d["text"]
+    metadata = d["metadata"]
+
+    image = image.convert("RGB")
+
+    resized_image = TF.resize(
+        image,
+        training_config.resolution,
+        interpolation=transforms.InterpolationMode.BILINEAR,
     )
-    adapter.to(device=device_id)
-    adapter.train()
-    adapter.requires_grad_(True)
-    adapter.enable_xformers_memory_efficient_attention()
-    adapter = DDP(adapter, device_ids=[device_id])
+
+    c_top, c_left, _, _ = transforms.RandomCrop.get_params(
+        resized_image,
+        output_size=(training_config.resolution, training_config.resolution),
+    )
+
+    resized_and_cropped_image = TF.crop(
+        resized_image,
+        c_top,
+        c_left,
+        training_config.resolution,
+        training_config.resolution,
+    )
+    resized_and_cropped_image_tensor = TF.to_tensor(resized_and_cropped_image)
+    resized_and_cropped_and_normalized_image_tensor = TF.normalize(
+        resized_and_cropped_image_tensor, [0.5], [0.5]
+    )
+
+    original_width = int(metadata.get("original_width", 0.0))
+    original_height = int(metadata.get("original_height", 0.0))
+
+    time_ids = torch.tensor(
+        [
+            original_width,
+            original_height,
+            c_top,
+            c_left,
+            training_config.resolution,
+            training_config.resolution,
+        ]
+    )
+
+    text_input_ids_one = tokenizer_one(
+        text,
+        padding="max_length",
+        max_length=tokenizer_one.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
+
+    text_input_ids_two = tokenizer_two(
+        text,
+        padding="max_length",
+        max_length=tokenizer_two.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
+
+    sample = {
+        "time_ids": time_ids,
+        "text_input_ids_one": text_input_ids_one,
+        "text_input_ids_two": text_input_ids_two,
+        "image": resized_and_cropped_and_normalized_image_tensor,
+    }
+
+    if training_config.training == "sdxl_adapter":
+        from mediapipe_pose import mediapipe_pose_adapter_image
+
+        resized_and_cropped_image = np.array(resized_and_cropped_image)
+
+        adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image)
+
+        sample["adapter_image"] = adapter_image
+
+    return sample
 
 
-def sdxl_unet_train_step(batch):
+def sdxl_train_step(batch):
     device_id = dist.get_rank()
 
     with torch.no_grad():
@@ -154,7 +221,14 @@ def sdxl_unet_train_step(batch):
 
         bsz = latents.shape[0]
 
-        timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,))
+        if training_config.training == "sdxl_adapter":
+            # Cubic sampling to sample a random timestep for each image
+            timesteps = torch.rand((bsz,), device=device_id)
+            timesteps = (1 - timesteps**3) * scheduler.config.num_train_timesteps
+            timesteps = timesteps.long().to(scheduler.timesteps.dtype)
+            timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
+        else:
+            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,))
 
         noise = torch.randn_like(latents)
         noisy_latents = scheduler.add_noise(latents, noise, timesteps)
@@ -168,61 +242,11 @@ def sdxl_unet_train_step(batch):
         training_config.mixed_precision,
         enabled=training_config.mixed_precision is not None,
     ):
-        model_pred = unet(
-            noisy_latents,
-            timesteps,
-            encoder_hidden_states=prompt_embeds,
-            added_cond_kwargs={
-                "time_ids": time_ids,
-                "text_embeds": pooled_prompt_embeds_two,
-            },
-        ).sample
-
-        loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
-
-    return loss
-
-
-def sdxl_adapter_train_step(batch):
-    device_id = dist.get_rank()
-
-    with torch.no_grad():
-        time_ids = batch["time_ids"].to(device_id)
-
-        image = batch["image"].to(device_id, dtype=vae.dtype)
-        latents = vae.encode(image).latent_dist.sample()
-
-        text_input_ids_one = batch["text_input_ids_one"].to(device_id)
-        text_input_ids_two = batch["text_input_ids_two"].to(device_id)
-
-        prompt_embeds, pooled_prompt_embeds_two = text_conditioning(
-            text_input_ids_one, text_input_ids_two
-        )
-        prompt_embeds = prompt_embeds.to(dtype=unet.dtype)
-        pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet.dtype)
-
-        bsz = latents.shape[0]
-
-        # Cubic sampling to sample a random timestep for each image
-        timesteps = torch.rand((bsz,), device=device_id)
-        timesteps = (1 - timesteps**3) * scheduler.config.num_train_timesteps
-        timesteps = timesteps.long().to(scheduler.timesteps.dtype)
-        timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
-
-        noise = torch.randn_like(latents)
-        noisy_latents = scheduler.add_noise(latents, noise, timesteps)
-
-        sigmas = get_sigmas(timesteps)
-        sigmas = sigmas.to(device=noisy_latents.device, dtype=noisy_latents.dtype)
-        noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
-
-    with torch.autocast(
-        "cuda",
-        training_config.mixed_precision,
-        enabled=training_config.mixed_precision is not None,
-    ):
-        adapter_image = batch["adapter_image"].to(device_id)
-        down_block_additional_residuals = adapter(adapter_image)
+        if training_config.training == "sdxl_adapter":
+            adapter_image = batch["adapter_image"].to(device_id)
+            down_block_additional_residuals = adapter(adapter_image)
+        else:
+            down_block_additional_residuals = None
 
         model_pred = unet(
             noisy_latents,
@@ -267,15 +291,6 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
     prompt_embeds = torch.cat((prompt_embeds_1, prompt_embeds_2), dim=-1)
 
     return prompt_embeds, pooled_prompt_embeds_2
-
-
-tokenizer_one = CLIPTokenizerFast.from_pretrained(
-    "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer"
-)
-
-tokenizer_two = CLIPTokenizerFast.from_pretrained(
-    "stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2"
-)
 
 
 @torch.no_grad()

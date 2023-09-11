@@ -5,6 +5,7 @@ from logging import getLogger
 
 import torch
 import torch.distributed as dist
+from bitsandbytes.optim import AdamW8bit
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -12,8 +13,6 @@ from tqdm.auto import tqdm
 
 import wandb
 from training_config import training_config
-
-from bitsandbytes.optim import AdamW8bit
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -35,32 +34,31 @@ def main():
         wandb.init()
 
     if training_config.training == "sdxl_unet":
-        from sdxl import init_sdxl_unet
+        from sdxl import init_sdxl
 
-        init_sdxl_unet()
+        init_sdxl()
 
-        from sdxl import sdxl_log_unet_validation, sdxl_unet_train_step, unet
-        from sdxl_dataset import get_sdxl_unet_dataset
+        from sdxl import (get_sdxl_dataset, sdxl_log_unet_validation,
+                          sdxl_train_step, unet)
 
         training_parameters = unet.parameters()
         parameters_to_clip = unet.parameters()
-        dataset = get_sdxl_unet_dataset()
+        dataset = get_sdxl_dataset()
         log_validation = sdxl_log_unet_validation
-        train_step = sdxl_unet_train_step
+        train_step = sdxl_train_step
     elif training_config.training == "sdxl_adapter":
-        from sdxl import init_sdxl_adapter
+        from sdxl import init_sdxl
 
-        init_sdxl_adapter()
+        init_sdxl()
 
-        from sdxl import (adapter, sdxl_adapter_train_step,
-                          sdxl_log_adapter_validation)
-        from sdxl_dataset import get_sdxl_adapter_dataset
+        from sdxl import (adapter, get_sdxl_dataset,
+                          sdxl_log_adapter_validation, sdxl_train_step)
 
         training_parameters = adapter.parameters()
         parameters_to_clip = adapter.parameters()
-        dataset = get_sdxl_adapter_dataset()
+        dataset = get_sdxl_dataset()
         log_validation = sdxl_log_adapter_validation
-        train_step = sdxl_adapter_train_step
+        train_step = sdxl_train_step
     else:
         assert False
 
@@ -86,7 +84,7 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    optimizer = AdamW8bit(training_parameters, lr=1e-5)
+    optimizer = AdamW8bit(training_parameters, lr=1e-7)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
@@ -153,7 +151,10 @@ def training_loop(
             log_validation(global_step)
 
         if dist.get_rank() == 0:
-            logs = {"loss": accumulated_loss.item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {
+                "loss": accumulated_loss.item(),
+                "lr": lr_scheduler.get_last_lr()[0],
+            }
             progress_bar.set_postfix(**logs)
             wandb.log(logs, step=global_step)
 
