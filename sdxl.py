@@ -14,7 +14,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
-                          CLIPTokenizerFast)
+                          CLIPTokenizer)
 
 import wandb
 from training_config import training_config
@@ -33,9 +33,9 @@ adapter: T2IAdapter = None
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
-tokenizer_one = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer")
+tokenizer_one = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer")
 
-tokenizer_two = CLIPTokenizerFast.from_pretrained(repo, subfolder="tokenizer_2")
+tokenizer_two = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer_2")
 
 _init_sdxl_called = False
 
