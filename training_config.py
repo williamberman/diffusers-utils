@@ -14,7 +14,7 @@ class Config:
     train_shards: str
 
     # `training_config.training == "sdxl_adapter"` specific config
-    adapter_type: Optional[Literal["mediapipe_pose"]] = None
+    adapter_type: Optional[Literal["mediapipe_pose", "openpose"]] = None
     adapter_conditioning_scale: float = 1.0
     adapter_conditioning_factor: float = 1.0
 

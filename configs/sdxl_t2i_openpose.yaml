@@ -1,7 +1,7 @@
-output_dir: "./output/sdxl_t2i_mediapipe_pose"
+output_dir: "./output/sdxl_t2i_openpose"
 training: "sdxl_adapter"
 train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
-adapter_type: "mediapipe_pose"
+adapter_type: "openpose"
 
 mixed_precision: fp16
 batch_size: 6

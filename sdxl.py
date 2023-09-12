@@ -199,13 +199,20 @@ def make_sample(d):
     }
 
     if training_config.training == "sdxl_adapter":
-        from mediapipe_pose import mediapipe_pose_adapter_image
+        if training_config.adapter_type == "mediapipe_pose":
+            from mediapipe_pose import mediapipe_pose_adapter_image
 
-        resized_and_cropped_image = np.array(resized_and_cropped_image)
+            adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image, return_type='vae_scaled_tensor')
 
-        adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image)
+            sample["adapter_image"] = adapter_image
+        elif training_config.adapter_type == "openpose":
+            from openpose import openpose_adapter_image
 
-        sample["adapter_image"] = adapter_image
+            adapter_image = openpose_adapter_image(resized_and_cropped_image, return_type='vae_scaled_tensor')
+
+            sample["adapter_image"] = adapter_image
+        else:
+            assert False
 
     return sample
 
@@ -387,9 +394,12 @@ def sdxl_log_unet_validation(step):
 
     unet_.train()
 
+_validation_images_logged = False
 
 @torch.no_grad()
 def sdxl_log_adapter_validation(step):
+    global _validation_images_logged
+
     adapter_ = maybe_ddp_module(adapter)
     adapter_.eval()
 
@@ -416,7 +426,23 @@ def sdxl_log_adapter_validation(step):
         validation_image = validation_image.resize(
             (training_config.resolution, training_config.resolution)
         )
+
+        if training_config.adapter_type == "mediapipe_pose":
+            from mediapipe_pose import mediapipe_pose_adapter_image
+
+            validation_image = mediapipe_pose_adapter_image(validation_image, return_type='pil')
+        elif training_config.adapter_type == "openpose":
+            from openpose import openpose_adapter_image
+
+            validation_image = openpose_adapter_image(validation_image, return_type='pil')
+        else:
+            assert False
+
         formatted_validation_images.append(validation_image)
+
+    if not _validation_images_logged:
+        wandb.log({"validation_conditioning": [wandb.Image(image) for image in formatted_validation_images]})
+        _validation_images_logged = True
 
     generator = torch.Generator().manual_seed(0)
 
