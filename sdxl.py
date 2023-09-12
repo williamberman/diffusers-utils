@@ -327,8 +327,6 @@ def sdxl_log_unet_validation(step):
         tokenizer_2=tokenizer_two,
     )
 
-    pipeline.set_progress_bar_config(disable=True)
-
     generator = torch.Generator().manual_seed(0)
 
     output_validation_images = []
@@ -369,8 +367,6 @@ def sdxl_log_adapter_validation(step):
         tokenizer=tokenizer_one,
         tokenizer_2=tokenizer_two,
     )
-
-    pipeline.set_progress_bar_config(disable=True)
 
     formatted_validation_images = []
 
