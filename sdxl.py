@@ -41,7 +41,6 @@ _init_sdxl_called = False
 
 device_id = int(os.environ['LOCAL_RANK'])
 
-
 def init_sdxl():
     global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
 
@@ -261,6 +260,7 @@ def sdxl_train_step(batch, global_step):
         if training_config.training == "sdxl_adapter":
             adapter_image = batch["adapter_image"].to(device_id)
             down_block_additional_residuals = adapter(adapter_image)
+            down_block_additional_residuals = [x*training_config.adapter_conditioning_scale for x in down_block_additional_residuals]
         else:
             down_block_additional_residuals = None
 
@@ -276,6 +276,15 @@ def sdxl_train_step(batch, global_step):
         ).sample
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
+
+        log_predicted_images(
+            noisy_latents=noisy_latents,
+            noise=noise,
+            sigmas=sigmas,
+            model_pred=model_pred,
+            timesteps=timesteps,
+            global_step=global_step,
+        )
 
     return loss
 
@@ -308,6 +317,36 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
 
     return prompt_embeds, pooled_prompt_embeds_2
 
+@torch.no_grad()
+def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, global_step):
+    os.makedirs('./output/test_out', exist_ok=True)
+
+    with torch.no_grad():
+        latent_predicted_img = noisy_latents[0:1] - sigmas[0:1] * model_pred[0:1]
+        latent_predicted_img = latent_predicted_img / vae.config.scaling_factor
+        latent_predicted_img = latent_predicted_img.to(torch.float16)
+        predicted_img = vae.decode(latent_predicted_img).sample
+        predicted_img = ((predicted_img * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
+        predicted_img = predicted_img[0]
+        predicted_img = predicted_img.permute(1, 2, 0)
+        predicted_img = predicted_img.cpu().numpy()
+        predicted_img = Image.fromarray(predicted_img)
+        predicted_img.save(f'./output/test_out/{global_step}-predicted.png')
+
+    with torch.no_grad():
+        actual_img = noisy_latents[0:1] - sigmas[0:1] * noise[0:1]
+        actual_img = actual_img / vae.config.scaling_factor
+        actual_img = actual_img.to(torch.float16)
+        actual_img = vae.decode(actual_img).sample
+        actual_img = ((actual_img * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
+        actual_img = actual_img[0]
+        actual_img = actual_img.permute(1, 2, 0)
+        actual_img = actual_img.cpu().numpy()
+        actual_img = Image.fromarray(actual_img)
+        actual_img.save(f'./output/test_out/{global_step}-actual.png')
+
+    with open(f"./output/test_out/{global_step}-{timesteps[0].item()}", "w") as f:
+        f.write('foo\n')
 
 @torch.no_grad()
 def sdxl_log_unet_validation(step):
@@ -392,6 +431,8 @@ def sdxl_log_adapter_validation(step):
                     prompt=validation_prompt,
                     image=validation_image,
                     generator=generator,
+                    adapter_conditioning_scale=training_config.adapter_conditioning_scale,
+                    adapter_conditioning_factor=training_config.adapter_conditioning_factor
                 ).images
 
     output_validation_images = [

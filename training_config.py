@@ -13,8 +13,10 @@ class Config:
     training: Literal["sdxl_adapter", "sdxl_unet"]
     train_shards: str
 
-    # set adapter type if `training_config.training == "sdxl_adapter"`
+    # `training_config.training == "sdxl_adapter"` specific config
     adapter_type: Optional[Literal["mediapipe_pose"]] = None
+    adapter_conditioning_scale: float = 1.0
+    adapter_conditioning_factor: float = 1.0
 
     # core training config
     gradient_accumulation_steps: int = 1
