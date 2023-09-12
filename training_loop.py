@@ -10,6 +10,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from torch.cuda.amp.grad_scaler import GradScaler
 
 import wandb
 from training_config import training_config
@@ -41,8 +42,8 @@ def main():
         from sdxl import (get_sdxl_dataset, sdxl_log_unet_validation,
                           sdxl_train_step, unet)
 
-        training_parameters = unet.parameters()
-        parameters_to_clip = unet.parameters()
+        training_parameters = unet.parameters
+        parameters_to_clip = unet.parameters
         dataset = get_sdxl_dataset()
         log_validation = sdxl_log_unet_validation
         train_step = sdxl_train_step
@@ -54,8 +55,8 @@ def main():
         from sdxl import (adapter, get_sdxl_dataset,
                           sdxl_log_adapter_validation, sdxl_train_step)
 
-        training_parameters = adapter.parameters()
-        parameters_to_clip = adapter.parameters()
+        training_parameters = adapter.parameters
+        parameters_to_clip = adapter.parameters
         dataset = get_sdxl_dataset()
         log_validation = sdxl_log_adapter_validation
         train_step = sdxl_train_step
@@ -84,7 +85,7 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    optimizer = AdamW8bit(training_parameters, lr=1e-5)
+    optimizer = AdamW8bit(training_parameters(), lr=1e-5)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
@@ -110,6 +111,8 @@ def training_loop(
 
     dataloader = iter(dataloader)
 
+    scaler = GradScaler(enabled=training_config.mixed_precision == torch.float16)
+
     while True:
         accumulated_loss = None
 
@@ -119,18 +122,25 @@ def training_loop(
             loss = train_step(batch=batch, global_step=global_step)
 
             loss = loss / training_config.gradient_accumulation_steps
-            loss.backward()
+
+            scaler.scale(loss).backward()
 
             if accumulated_loss is None:
                 accumulated_loss = loss.detach()
             else:
                 accumulated_loss += loss.detach()
 
-        clip_grad_norm_(parameters_to_clip, 1.0)
+        scaler.unscale_(optimizer)
 
-        optimizer.step()
+        clip_grad_norm_(parameters_to_clip(), 1.0)
+
+        scaler.step(optimizer)
+
         lr_scheduler.step()
+
         optimizer.zero_grad(set_to_none=True)
+
+        scaler.update()
 
         progress_bar.update(1)
         global_step += 1
