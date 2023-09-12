@@ -223,6 +223,7 @@ def sdxl_train_step(batch, global_step):
 
         image = batch["image"].to(device_id, dtype=vae.dtype)
         latents = vae.encode(image).latent_dist.sample().to(dtype=unet_dtype)
+        latents = latents * vae.config.scaling_factor
 
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
