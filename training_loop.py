@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from torch.cuda.amp.grad_scaler import GradScaler
+from safetensors import safe_open
 
 import wandb
 from training_config import training_config
@@ -210,16 +211,18 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
 
 def load_checkpoint(resume_from, optimizer):
-    optimizer.load(os.path.join(resume_from, "optimizer.bin"))
+    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"))
+    optimizer.load_state_dict(optimizer_state_dict)
 
     if training_config.training == "sdxl_adapter":
         from sdxl import adapter
 
-        adapter_state_dict = torch.load(
-            os.path.join(resume_from, "adapter", "pytorch_model.bin"),
-            map_location=adapter.device,
-        )
-        adapter.load_state_dict(adapter_state_dict)
+        adapter_state_dict = {}
+        with safe_open(os.path.join(resume_from, "diffusion_pytorch_model.safetensors"), framework="pt") as f:
+            for key in f.keys():
+                adapter_state_dict[key] = f.get_tensor(key)
+
+        adapter.module.load_state_dict(adapter_state_dict)
     else:
         assert False
 

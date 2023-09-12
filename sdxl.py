@@ -104,7 +104,7 @@ def init_sdxl():
 
 def get_sdxl_dataset():
     dataset = (
-        wds.WebDataset(training_config.train_shards, resampled=True)
+        wds.WebDataset(training_config.train_shards, resampled=True, handler=wds.ignore_and_continue)
         .shuffle(training_config.shuffle_buffer_size)
         .decode("pil", handler=wds.ignore_and_continue)
         .rename(
