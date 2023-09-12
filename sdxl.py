@@ -243,7 +243,7 @@ def sdxl_train_step(batch, global_step):
             timesteps = timesteps.long().to(scheduler.timesteps.dtype)
             timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
         else:
-            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,))
+            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,), device=device_id)
 
         noise = torch.randn_like(latents)
         noisy_latents = scheduler.add_noise(latents, noise, timesteps)
