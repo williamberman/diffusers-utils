@@ -7,21 +7,31 @@ import torchvision.transforms.functional as TF
 import webdataset as wds
 from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
+                       StableDiffusionXLControlNetPipeline,
                        StableDiffusionXLPipeline, T2IAdapter,
-                       UNet2DConditionModel)
+                       UNet2DConditionModel, ControlNetModel)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
+from typing import Literal
 
 import wandb
 from training_config import training_config
 
+repo = "stabilityai/stable-diffusion-xl-base-1.0"
+
+device_id = int(os.environ['LOCAL_RANK'])
+
 vae: AutoencoderKL = None
 
+tokenizer_one = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer")
+
 text_encoder_one: CLIPTextModel = None
+
+tokenizer_two = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer_2")
 
 text_encoder_two: CLIPTextModelWithProjection = None
 
@@ -31,18 +41,13 @@ scheduler: EulerDiscreteScheduler = None
 
 adapter: T2IAdapter = None
 
-repo = "stabilityai/stable-diffusion-xl-base-1.0"
-
-tokenizer_one = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer")
-
-tokenizer_two = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer_2")
+controlnet: ControlNetModel
 
 _init_sdxl_called = False
 
-device_id = int(os.environ['LOCAL_RANK'])
 
 def init_sdxl():
-    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter
+    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter, controlnet
 
     if _init_sdxl_called:
         raise ValueError("`init_sdxl` called more than once")
@@ -100,6 +105,15 @@ def init_sdxl():
         adapter.requires_grad_(True)
         adapter.enable_xformers_memory_efficient_attention()
         adapter = DDP(adapter, device_ids=[device_id])
+
+    if training_config.training == "sdxl_controlnet":
+        controlnet = ControlNetModel.from_unet(unet)
+        controlnet.to(device=device_id)
+        controlnet.train()
+        controlnet.requires_grad_(True)
+        controlnet.enable_xformers_memory_efficient_attention()
+        controlnet = DDP(controlnet, device_ids=[device_id])
+        
 
 
 def get_sdxl_dataset():
@@ -214,6 +228,14 @@ def make_sample(d):
         else:
             assert False
 
+    if training_config.training == "sdxl_controlnet":
+        if training_config.controlnet_type == "canny":
+            controlnet_image = make_canny_conditioning(resized_and_cropped_image)
+
+            sample["controlnet_image"] = controlnet_image
+        else:
+            assert False
+
     return sample
 
 
@@ -264,12 +286,30 @@ def sdxl_train_step(batch, global_step):
         training_config.mixed_precision,
         enabled=training_config.mixed_precision is not None,
     ):
+        down_block_additional_residuals = None
+        mid_block_additional_residual = None
+
         if training_config.training == "sdxl_adapter":
             adapter_image = batch["adapter_image"].to(device_id)
+
             down_block_additional_residuals = adapter(adapter_image)
+
             down_block_additional_residuals = [x*training_config.adapter_conditioning_scale for x in down_block_additional_residuals]
-        else:
-            down_block_additional_residuals = None
+
+        if training_config.training == "sdxl_controlnet":
+            controlnet_image = batch["controlnet_image"].to(device_id) 
+
+            down_block_additional_residuals, mid_block_additional_residual = controlnet(
+                noisy_latents,
+                timesteps,
+                encoder_hidden_states=prompt_embeds,
+                added_cond_kwargs={
+                    "time_ids": time_ids,
+                    "text_embeds": pooled_prompt_embeds_two,
+                },
+                controlnet_cond=controlnet_image,
+                return_dict=False,
+            )
 
         model_pred = unet(
             scaled_noisy_latents,
@@ -280,6 +320,7 @@ def sdxl_train_step(batch, global_step):
                 "text_embeds": pooled_prompt_embeds_two,
             },
             down_block_additional_residuals=down_block_additional_residuals,
+            mid_block_additional_residual=mid_block_additional_residual,
         ).sample
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
@@ -355,111 +396,112 @@ def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, gl
     with open(f"./output/test_out/{global_step}-{timesteps[0].item()}", "w") as f:
         f.write('foo\n')
 
-@torch.no_grad()
-def sdxl_log_unet_validation(step):
-    unet_ = maybe_ddp_module(unet)
-    unet_.eval()
-
-    # NOTE - this has to be different from the module level scheduler because
-    # the pipeline mutates it.
-    scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
-
-    pipeline = StableDiffusionXLPipeline(
-        vae=vae,
-        text_encoder=text_encoder_one,
-        text_encoder_2=text_encoder_two,
-        unet=unet_,
-        scheduler=scheduler,
-        tokenizer=tokenizer_one,
-        tokenizer_2=tokenizer_two,
-    )
-
-    generator = torch.Generator().manual_seed(0)
-
-    output_validation_images = []
-
-    for validation_prompt in training_config.validation_prompts:
-        for _ in range(training_config.num_validation_images):
-            with torch.autocast("cuda"):
-                output_validation_images += pipeline(
-                    prompt=validation_prompt,
-                    generator=generator,
-                ).images
-
-    output_validation_images = [
-        wandb.Image(image) for image in output_validation_images
-    ]
-
-    wandb.log({"validation": output_validation_images}, step=step)
-
-    unet_.train()
-
 _validation_images_logged = False
 
 @torch.no_grad()
-def sdxl_log_adapter_validation(step):
+def sdxl_log_validation(step):
     global _validation_images_logged
-
-    adapter_ = maybe_ddp_module(adapter)
-    adapter_.eval()
 
     # NOTE - this has to be different from the module level scheduler because
     # the pipeline mutates it.
     scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
-    pipeline = StableDiffusionXLAdapterPipeline(
-        vae=vae,
-        text_encoder=text_encoder_one,
-        text_encoder_2=text_encoder_two,
-        unet=unet,
-        adapter=adapter_,
-        scheduler=scheduler,
-        tokenizer=tokenizer_one,
-        tokenizer_2=tokenizer_two,
-    )
+    if training_config.training == "sdxl_unet":
+        unet_ = maybe_ddp_module(unet)
+        unet_.eval()
 
-    formatted_validation_images = []
-
-    for validation_image in training_config.validation_images:
-        validation_image = Image.open(validation_image)
-        validation_image = validation_image.convert("RGB")
-        validation_image = validation_image.resize(
-            (training_config.resolution, training_config.resolution)
+        pipeline = StableDiffusionXLPipeline(
+            vae=vae,
+            text_encoder=text_encoder_one,
+            text_encoder_2=text_encoder_two,
+            unet=unet_,
+            scheduler=scheduler,
+            tokenizer=tokenizer_one,
+            tokenizer_2=tokenizer_two,
         )
+    elif training_config.training == "sdxl_adapter":
+        adapter_ = maybe_ddp_module(adapter)
+        adapter_.eval()
 
-        if training_config.adapter_type == "mediapipe_pose":
-            from mediapipe_pose import mediapipe_pose_adapter_image
+        pipeline = StableDiffusionXLAdapterPipeline(
+            vae=vae,
+            text_encoder=text_encoder_one,
+            text_encoder_2=text_encoder_two,
+            unet=unet,
+            adapter=adapter_,
+            scheduler=scheduler,
+            tokenizer=tokenizer_one,
+            tokenizer_2=tokenizer_two,
+        )
+    elif training_config.training == "sdxl_controlnet":
+        controlnet_ = maybe_ddp_module(controlnet)
+        controlnet_.eval()
 
-            validation_image = mediapipe_pose_adapter_image(validation_image, return_type='pil')
-        elif training_config.adapter_type == "openpose":
-            from openpose import openpose_adapter_image
+        pipeline = StableDiffusionXLControlNetPipeline(
+            vae=vae,
+            text_encoder=text_encoder_one,
+            text_encoder_2=text_encoder_two,
+            unet=unet,
+            controlnet=controlnet_,
+            scheduler=scheduler,
+            tokenizer=tokenizer_one,
+            tokenizer_2=tokenizer_two,
+        )
+    else:
+        assert False
 
-            validation_image = openpose_adapter_image(validation_image, return_type='pil')
-        else:
-            assert False
+    formatted_validation_images = None
 
-        formatted_validation_images.append(validation_image)
+    if training_config.training in ["sdxl_adapter", "sdxl_controlnet"]:
+        formatted_validation_images = []
 
-    if not _validation_images_logged:
-        wandb.log({"validation_conditioning": [wandb.Image(image) for image in formatted_validation_images]})
-        _validation_images_logged = True
+        for validation_image in training_config.validation_images:
+            validation_image = Image.open(validation_image)
+            validation_image = validation_image.convert("RGB")
+            validation_image = validation_image.resize(
+                (training_config.resolution, training_config.resolution)
+            )
+
+            if training_config.training == "sdxl_adapter":
+                if training_config.adapter_type == "mediapipe_pose":
+                    from mediapipe_pose import mediapipe_pose_adapter_image
+
+                    validation_image = mediapipe_pose_adapter_image(validation_image, return_type='pil')
+                elif training_config.adapter_type == "openpose":
+                    from openpose import openpose_adapter_image
+
+                    validation_image = openpose_adapter_image(validation_image, return_type='pil')
+                else:
+                    assert False
+            elif training_config.training == "sdxl_controlnet":
+                if training_config.controlnet_type == "canny":
+                    validation_image = make_canny_conditioning(validation_image, return_type='pil')
+                else:
+                    assert False
+            else:
+                assert False
+
+            formatted_validation_images.append(validation_image)
 
     generator = torch.Generator().manual_seed(0)
 
     output_validation_images = []
 
-    for validation_prompt, validation_image in zip(
-        training_config.validation_prompts, formatted_validation_images
-    ):
-        for _ in range(training_config.num_validation_images):
-            with torch.autocast("cuda"):
-                output_validation_images += pipeline(
-                    prompt=validation_prompt,
-                    image=validation_image,
-                    generator=generator,
-                    adapter_conditioning_scale=training_config.adapter_conditioning_scale,
-                    adapter_conditioning_factor=training_config.adapter_conditioning_factor
-                ).images
+    for i, validation_prompt in enumerate(training_config.validation_prompts):
+        args = {
+            "prompt": validation_prompt,
+            "generator": generator,
+        }
+
+        if formatted_validation_images is not None:
+            args[image] = formatted_validation_images[i]
+
+        if training_config.training == "sdxl_adapter":
+            args["adapter_conditioning_scale"] = training_config.adapter_conditioning_scale
+            args["adapter_conditioning_factor"] = training_config.adapter_conditioning_factor
+
+        with torch.autocast("cuda"):
+            output_validation_images += pipeline(**args).images
 
     output_validation_images = [
         wandb.Image(image) for image in output_validation_images
@@ -467,7 +509,14 @@ def sdxl_log_adapter_validation(step):
 
     wandb.log({"validation": output_validation_images}, step=step)
 
-    adapter_.train()
+    if training_config.training == "sdxl_unet":
+        unet_.train()
+    elif training_config.training == "sdxl_adapter":
+        adapter_.train()
+    elif training_config.training == "sdxl_controlnet":
+        controlnet_.train()
+    else:
+        assert False
 
 
 def get_sigmas(timesteps, n_dim=4):
@@ -493,3 +542,20 @@ def maybe_ddp_module(m):
     if isinstance(m, DDP):
         m = m.module
     return m
+
+def make_canny_conditioning(image, return_type: Literal["vae_scaled_tensor", "pil"]='vae_scaled_tensor'):
+    import cv2
+
+    controlnet_image = np.array(image)
+    controlnet_image = cv2.Canny(controlnet_image, 100, 200)
+    controlnet_image = controlnet_image[:, :, None]
+    controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], dim=2)
+
+    if return_type == 'vae_scaled_tensor':
+        controlnet_image = TF.to_tensor(controlnet_image)
+    elif return_type == 'pil':
+        controlnet_image = Image.fromarray(controlnet_image)
+    else:
+        assert False
+
+    return controlnet_image

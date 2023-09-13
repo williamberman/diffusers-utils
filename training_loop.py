@@ -40,13 +40,13 @@ def main():
 
         init_sdxl()
 
-        from sdxl import (get_sdxl_dataset, sdxl_log_unet_validation,
+        from sdxl import (get_sdxl_dataset, sdxl_log_validation,
                           sdxl_train_step, unet)
 
         training_parameters = unet.parameters
         parameters_to_clip = unet.parameters
         dataset = get_sdxl_dataset()
-        log_validation = sdxl_log_unet_validation
+        log_validation = sdxl_log_validation
         train_step = sdxl_train_step
     elif training_config.training == "sdxl_adapter":
         from sdxl import init_sdxl
@@ -54,12 +54,25 @@ def main():
         init_sdxl()
 
         from sdxl import (adapter, get_sdxl_dataset,
-                          sdxl_log_adapter_validation, sdxl_train_step)
+                          sdxl_log_validation, sdxl_train_step)
 
         training_parameters = adapter.parameters
         parameters_to_clip = adapter.parameters
         dataset = get_sdxl_dataset()
-        log_validation = sdxl_log_adapter_validation
+        log_validation = sdxl_log_validation
+        train_step = sdxl_train_step
+    elif training_config.training == "sdxl_controlnet":
+        from sdxl import init_sdxl
+
+        init_sdxl()
+
+        from sdxl import (controlnet, get_sdxl_dataset,
+                          sdxl_log_validation, sdxl_train_step)
+
+        training_parameters = controlnet.parameters
+        parameters_to_clip = controlnet.parameters
+        dataset = get_sdxl_dataset()
+        log_validation = sdxl_log_validation
         train_step = sdxl_train_step
     else:
         assert False
@@ -79,6 +92,8 @@ def main():
             unet.module.save_pretrained(training_config.output_dir)
         elif training_config.training == "sdxl_adapter":
             adapter.module.save_pretrained(training_config.output_dir)
+        elif training_config.training == "sdxl_controlnet":
+            controlnet.module.save_pretrained(training_config.output_dir)
         else:
             assert False
 
@@ -201,7 +216,15 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
     if training_config.training == "sdxl_adapter":
         from sdxl import adapter
 
-        adapter.module.save_pretrained(save_path, subfolder="adapter")
+        save_path = os.path.join(save_path, "adapter")
+
+        adapter.module.save_pretrained(save_path)
+    elif training_config.training == "sdxl_controlnet":
+        from sdxl import controlnet
+
+        save_path = os.path.join(save_path, "controlnet")
+
+        controlnet.module.save_pretrained(save_path)
     else:
         assert False
 
@@ -217,14 +240,30 @@ def load_checkpoint(resume_from, optimizer):
     if training_config.training == "sdxl_adapter":
         from sdxl import adapter
 
-        adapter_state_dict = {}
-        with safe_open(os.path.join(resume_from, "diffusion_pytorch_model.safetensors"), framework="pt") as f:
-            for key in f.keys():
-                adapter_state_dict[key] = f.get_tensor(key)
+        state_dict = load_safetensors_state_dict(
+            os.path.join(resume_from, "adapter", "diffusion_pytorch_model.safetensors")
+        )
 
-        adapter.module.load_state_dict(adapter_state_dict)
+        adapter.module.load_state_dict(state_dict)
+    elif training_config.training == "sdxl_controlnet":
+        from sdxl import controlnet
+
+        state_dict = load_safetensors_state_dict(
+            os.path.join(resume_from, "controlnet", "diffusion_pytorch_model.safetensors")
+        )
+
+        controlnet.module.load_state_dict(state_dict)
     else:
         assert False
+
+def load_safetensors_state_dict(filename):
+    state_dict = {}
+
+    with safe_open(filename, framework="pt") as f:
+        for key in f.keys():
+            state_dict[key] = f.get_tensor(key)
+
+    return state_dict
 
 
 if __name__ == "__main__":

@@ -10,13 +10,15 @@ import yaml
 class Config:
     # required config
     output_dir: str
-    training: Literal["sdxl_adapter", "sdxl_unet"]
+    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
     train_shards: str
 
     # `training_config.training == "sdxl_adapter"` specific config
     adapter_type: Optional[Literal["mediapipe_pose", "openpose"]] = None
     adapter_conditioning_scale: float = 1.0
     adapter_conditioning_factor: float = 1.0
+
+    controlnet_type: Optional[Literal["canny"]] = None
 
     # core training config
     gradient_accumulation_steps: int = 1
@@ -68,3 +70,9 @@ training_config: Config = Config(**yaml_config)
 if training_config.training == "sdxl_adapter":
     if training_config.adapter_type is None:
         raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
+
+if training_config.training == "sdxl_controlnet":
+    if training_config.controlnet_type is None:
+        raise ValueError(
+            'must set `controlnet_type` if `training` set to "sdxl_controlnet"'
+        )
