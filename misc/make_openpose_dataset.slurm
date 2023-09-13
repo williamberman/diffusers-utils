@@ -15,5 +15,5 @@ conda activate base
 
 cd /fsx/william/diffusers-utils
 
-time srun --wait=60 --kill-on-bad-exit=1 \
-    python misc/make_openpose_dataset.py --slurm --start_shard 0 --end_shard 7
+time srun --wait=60 \
+    python misc/make_openpose_dataset.py --slurm --start_shard 0 --end_shard 600
