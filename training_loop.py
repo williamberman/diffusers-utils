@@ -5,15 +5,15 @@ from logging import getLogger
 
 import torch
 import torch.distributed as dist
+import wandb
 from bitsandbytes.optim import AdamW8bit
+from safetensors import safe_open
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from torch.cuda.amp.grad_scaler import GradScaler
-from safetensors import safe_open
 
-import wandb
 from training_config import training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -53,8 +53,8 @@ def main():
 
         init_sdxl()
 
-        from sdxl import (adapter, get_sdxl_dataset,
-                          sdxl_log_validation, sdxl_train_step)
+        from sdxl import (adapter, get_sdxl_dataset, sdxl_log_validation,
+                          sdxl_train_step)
 
         training_parameters = adapter.parameters
         parameters_to_clip = adapter.parameters
@@ -66,8 +66,8 @@ def main():
 
         init_sdxl()
 
-        from sdxl import (controlnet, get_sdxl_dataset,
-                          sdxl_log_validation, sdxl_train_step)
+        from sdxl import (controlnet, get_sdxl_dataset, sdxl_log_validation,
+                          sdxl_train_step)
 
         training_parameters = controlnet.parameters
         parameters_to_clip = controlnet.parameters
@@ -249,12 +249,15 @@ def load_checkpoint(resume_from, optimizer):
         from sdxl import controlnet
 
         state_dict = load_safetensors_state_dict(
-            os.path.join(resume_from, "controlnet", "diffusion_pytorch_model.safetensors")
+            os.path.join(
+                resume_from, "controlnet", "diffusion_pytorch_model.safetensors"
+            )
         )
 
         controlnet.module.load_state_dict(state_dict)
     else:
         assert False
+
 
 def load_safetensors_state_dict(filename):
     state_dict = {}

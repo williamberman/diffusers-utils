@@ -1,3 +1,5 @@
+from typing import Literal
+
 import mediapipe as mp
 import numpy as np
 import torch
@@ -6,7 +8,6 @@ from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from PIL import Image
-from typing import Literal
 
 # General instructions: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/python
 #
@@ -34,7 +35,9 @@ def init_mediapipe_pose():
     detector = vision.PoseLandmarker.create_from_options(options)
 
 
-def mediapipe_pose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"]='vae_scaled_tensor'):
+def mediapipe_pose_adapter_image(
+    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
+):
     init_mediapipe_pose()
 
     numpy_image = np.array(image)
@@ -53,12 +56,12 @@ def mediapipe_pose_adapter_image(image, return_type: Literal["vae_scaled_tensor"
     pose = np.zeros((height, width, 3), dtype=np.uint8)
     draw_landmarks_on_image(pose, pose_landmarks)
 
-    if return_type == 'vae_scaled_tensor':
+    if return_type == "vae_scaled_tensor":
         pose = torch.tensor(pose)
         pose = pose.permute(2, 0, 1)
         pose = pose.float()
         pose = pose / 255.0
-    elif return_type == 'pil':
+    elif return_type == "pil":
         pose = Image.fromarray(pose)
     else:
         assert False

@@ -1,29 +1,30 @@
 import os
 import random
+from typing import Literal
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
+import wandb
 import webdataset as wds
-from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
+from diffusers import (AutoencoderKL, ControlNetModel, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
                        StableDiffusionXLControlNetPipeline,
                        StableDiffusionXLPipeline, T2IAdapter,
-                       UNet2DConditionModel, ControlNetModel)
+                       UNet2DConditionModel)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
-from typing import Literal
 
-import wandb
 from training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
-device_id = int(os.environ['LOCAL_RANK'])
+device_id = int(os.environ["LOCAL_RANK"])
 
 vae: AutoencoderKL = None
 
@@ -113,12 +114,15 @@ def init_sdxl():
         controlnet.requires_grad_(True)
         controlnet.enable_xformers_memory_efficient_attention()
         controlnet = DDP(controlnet, device_ids=[device_id])
-        
 
 
 def get_sdxl_dataset():
     dataset = (
-        wds.WebDataset(training_config.train_shards, resampled=True, handler=wds.ignore_and_continue)
+        wds.WebDataset(
+            training_config.train_shards,
+            resampled=True,
+            handler=wds.ignore_and_continue,
+        )
         .shuffle(training_config.shuffle_buffer_size)
         .decode("pil", handler=wds.ignore_and_continue)
         .rename(
@@ -216,13 +220,17 @@ def make_sample(d):
         if training_config.adapter_type == "mediapipe_pose":
             from mediapipe_pose import mediapipe_pose_adapter_image
 
-            adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image, return_type='vae_scaled_tensor')
+            adapter_image = mediapipe_pose_adapter_image(
+                resized_and_cropped_image, return_type="vae_scaled_tensor"
+            )
 
             sample["adapter_image"] = adapter_image
         elif training_config.adapter_type == "openpose":
             from openpose import openpose_adapter_image
 
-            adapter_image = openpose_adapter_image(resized_and_cropped_image, return_type='vae_scaled_tensor')
+            adapter_image = openpose_adapter_image(
+                resized_and_cropped_image, return_type="vae_scaled_tensor"
+            )
 
             sample["adapter_image"] = adapter_image
         else:
@@ -272,7 +280,9 @@ def sdxl_train_step(batch, global_step):
             timesteps = timesteps.long().to(scheduler.timesteps.dtype)
             timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
         else:
-            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,), device=device_id)
+            timesteps = torch.randint(
+                0, scheduler.config.num_train_timesteps, (bsz,), device=device_id
+            )
 
         noise = torch.randn_like(latents)
         noisy_latents = scheduler.add_noise(latents, noise, timesteps)
@@ -294,10 +304,13 @@ def sdxl_train_step(batch, global_step):
 
             down_block_additional_residuals = adapter(adapter_image)
 
-            down_block_additional_residuals = [x*training_config.adapter_conditioning_scale for x in down_block_additional_residuals]
+            down_block_additional_residuals = [
+                x * training_config.adapter_conditioning_scale
+                for x in down_block_additional_residuals
+            ]
 
         if training_config.training == "sdxl_controlnet":
-            controlnet_image = batch["controlnet_image"].to(device_id) 
+            controlnet_image = batch["controlnet_image"].to(device_id)
 
             down_block_additional_residuals, mid_block_additional_residual = controlnet(
                 noisy_latents,
@@ -365,9 +378,12 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
 
     return prompt_embeds, pooled_prompt_embeds_2
 
+
 @torch.no_grad()
-def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, global_step):
-    os.makedirs('./output/test_out', exist_ok=True)
+def log_predicted_images(
+    noisy_latents, sigmas, noise, model_pred, timesteps, global_step
+):
+    os.makedirs("./output/test_out", exist_ok=True)
 
     with torch.no_grad():
         latent_predicted_img = noisy_latents[0:1] - sigmas[0:1] * model_pred[0:1]
@@ -379,7 +395,7 @@ def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, gl
         predicted_img = predicted_img.permute(1, 2, 0)
         predicted_img = predicted_img.cpu().numpy()
         predicted_img = Image.fromarray(predicted_img)
-        predicted_img.save(f'./output/test_out/{global_step}-predicted.png')
+        predicted_img.save(f"./output/test_out/{global_step}-predicted.png")
 
     with torch.no_grad():
         actual_img = noisy_latents[0:1] - sigmas[0:1] * noise[0:1]
@@ -391,12 +407,14 @@ def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, gl
         actual_img = actual_img.permute(1, 2, 0)
         actual_img = actual_img.cpu().numpy()
         actual_img = Image.fromarray(actual_img)
-        actual_img.save(f'./output/test_out/{global_step}-actual.png')
+        actual_img.save(f"./output/test_out/{global_step}-actual.png")
 
     with open(f"./output/test_out/{global_step}-{timesteps[0].item()}", "w") as f:
-        f.write('foo\n')
+        f.write("foo\n")
+
 
 _validation_images_logged = False
+
 
 @torch.no_grad()
 def sdxl_log_validation(step):
@@ -466,16 +484,22 @@ def sdxl_log_validation(step):
                 if training_config.adapter_type == "mediapipe_pose":
                     from mediapipe_pose import mediapipe_pose_adapter_image
 
-                    validation_image = mediapipe_pose_adapter_image(validation_image, return_type='pil')
+                    validation_image = mediapipe_pose_adapter_image(
+                        validation_image, return_type="pil"
+                    )
                 elif training_config.adapter_type == "openpose":
                     from openpose import openpose_adapter_image
 
-                    validation_image = openpose_adapter_image(validation_image, return_type='pil')
+                    validation_image = openpose_adapter_image(
+                        validation_image, return_type="pil"
+                    )
                 else:
                     assert False
             elif training_config.training == "sdxl_controlnet":
                 if training_config.controlnet_type == "canny":
-                    validation_image = make_canny_conditioning(validation_image, return_type='pil')
+                    validation_image = make_canny_conditioning(
+                        validation_image, return_type="pil"
+                    )
                 else:
                     assert False
             else:
@@ -497,8 +521,12 @@ def sdxl_log_validation(step):
             args[image] = formatted_validation_images[i]
 
         if training_config.training == "sdxl_adapter":
-            args["adapter_conditioning_scale"] = training_config.adapter_conditioning_scale
-            args["adapter_conditioning_factor"] = training_config.adapter_conditioning_factor
+            args[
+                "adapter_conditioning_scale"
+            ] = training_config.adapter_conditioning_scale
+            args[
+                "adapter_conditioning_factor"
+            ] = training_config.adapter_conditioning_factor
 
         with torch.autocast("cuda"):
             output_validation_images += pipeline(**args).images
@@ -538,22 +566,28 @@ def maybe_ddp_dtype(m):
         m = m.module
     return m.dtype
 
+
 def maybe_ddp_module(m):
     if isinstance(m, DDP):
         m = m.module
     return m
 
-def make_canny_conditioning(image, return_type: Literal["vae_scaled_tensor", "pil"]='vae_scaled_tensor'):
+
+def make_canny_conditioning(
+    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
+):
     import cv2
 
     controlnet_image = np.array(image)
     controlnet_image = cv2.Canny(controlnet_image, 100, 200)
     controlnet_image = controlnet_image[:, :, None]
-    controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], dim=2)
+    controlnet_image = np.concatenate(
+        [controlnet_image, controlnet_image, controlnet_image], dim=2
+    )
 
-    if return_type == 'vae_scaled_tensor':
+    if return_type == "vae_scaled_tensor":
         controlnet_image = TF.to_tensor(controlnet_image)
-    elif return_type == 'pil':
+    elif return_type == "pil":
         controlnet_image = Image.fromarray(controlnet_image)
     else:
         assert False
