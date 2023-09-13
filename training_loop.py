@@ -93,10 +93,10 @@ def training_loop(
     if training_config.resume_from is not None:
         load_checkpoint(training_config.resume_from, optimizer=optimizer)
 
-    global_step = 0
+    global_step = training_config.start_step
 
     progress_bar = tqdm(
-        range(0, training_config.max_train_steps),
+        range(global_step, training_config.max_train_steps),
         disable=dist.get_rank() != 0,
     )
 

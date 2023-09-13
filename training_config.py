@@ -24,6 +24,7 @@ class Config:
     batch_size: int = 8
     max_train_steps: int = 30_000
     resume_from: Optional[str] = None
+    start_step: int = 0
 
     # data config
     resolution: int = 1024
