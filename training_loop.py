@@ -5,7 +5,6 @@ from logging import getLogger
 
 import torch
 import torch.distributed as dist
-import wandb
 from bitsandbytes.optim import AdamW8bit
 from safetensors import safe_open
 from torch.cuda.amp.grad_scaler import GradScaler
@@ -14,6 +13,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+import wandb
 from training_config import training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True

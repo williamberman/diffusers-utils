@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-import wandb
 import webdataset as wds
 from diffusers import (AutoencoderKL, ControlNetModel, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
@@ -20,6 +19,7 @@ from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
 
+import wandb
 from training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -506,6 +506,16 @@ def sdxl_log_validation(step):
                 assert False
 
             formatted_validation_images.append(validation_image)
+
+        if not _validation_images_logged:
+            wandb.log(
+                {
+                    "validation_conditioning": [
+                        wandb.Image(image) for image in formatted_validation_images
+                    ]
+                }
+            )
+            _validation_images_logged = True
 
     generator = torch.Generator().manual_seed(0)
 
