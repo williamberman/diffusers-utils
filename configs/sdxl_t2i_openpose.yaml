@@ -8,7 +8,7 @@ batch_size: 6
 
 proportion_empty_prompts: 0.5
 
-validation_steps: 100
+validation_steps: 300
 checkpointing_steps: 100
 validation_images:
 - ./sdxl_t2i_pose_validation/0.png
@@ -21,3 +21,6 @@ validation_prompts:
 # - "elon musk"
 # - "jerry seinfeld"
 num_validation_images: 1
+
+resume_from: ./output/sdxl_t2i_openpose/checkpoint-900
+start_step: 900
