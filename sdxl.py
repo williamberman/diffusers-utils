@@ -518,7 +518,7 @@ def sdxl_log_validation(step):
         }
 
         if formatted_validation_images is not None:
-            args[image] = formatted_validation_images[i]
+            args["image"] = formatted_validation_images[i]
 
         if training_config.training == "sdxl_adapter":
             args[
@@ -582,7 +582,7 @@ def make_canny_conditioning(
     controlnet_image = cv2.Canny(controlnet_image, 100, 200)
     controlnet_image = controlnet_image[:, :, None]
     controlnet_image = np.concatenate(
-        [controlnet_image, controlnet_image, controlnet_image], dim=2
+        [controlnet_image, controlnet_image, controlnet_image], axis=2
     )
 
     if return_type == "vae_scaled_tensor":
