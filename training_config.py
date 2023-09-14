@@ -5,6 +5,9 @@ from typing import List, Literal, Optional
 import torch
 import yaml
 
+DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
+DIFFUSERS_UTILS_TRAINING_CONFIG_2 = "DIFFUSERS_UTILS_TRAINING_CONFIG_2"
+
 
 @dataclass
 class Config:
@@ -22,6 +25,7 @@ class Config:
     controlnet_type: Optional[Literal["canny", "inpainting"]] = None
 
     # core training config
+    learning_rate: float = 0.00001
     gradient_accumulation_steps: int = 1
     mixed_precision: Optional[torch.dtype] = None
     batch_size: int = 8
@@ -45,17 +49,32 @@ class Config:
     checkpoints_total_limit: int = 5
 
 training_config: Config = None
+training_run_name: str = None
 
 def load_training_config():
-    global training_config 
+    global training_config, training_run_name
 
-    if "DIFFUSERS_UTILS_TRAINING_CONFIG" not in os.environ:
+    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
         raise ValueError(
-            "Must set environment variable `DIFFUSERS_UTILS_TRAINING_CONFIG` to path to the yaml config to use for the training run."
+            f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run."
         )
 
-    with open(os.environ["DIFFUSERS_UTILS_TRAINING_CONFIG"], "r") as f:
+    if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
+        training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2]
+    else:
+        training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
+
+    training_run_name = os.path.splitext(
+        os.path.basename(training_run_name)
+    )[0]
+
+    with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG], "r") as f:
         yaml_config = yaml.safe_load(f.read())
+
+    if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
+        with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2], "r") as f:
+            yaml_config_2 = yaml.safe_load(f.read())
+            yaml_config.update(yaml_config_2)
 
     if (
         "mixed_precision" not in yaml_config

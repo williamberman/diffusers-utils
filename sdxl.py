@@ -376,7 +376,7 @@ def sdxl_train_step(batch, global_step):
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
 
-        if dist.get_rank() == 0:
+        if False and dist.get_rank() == 0:
             log_predicted_images(
                 noisy_latents=noisy_latents,
                 noise=noise,

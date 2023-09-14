@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
-from training_config import training_config, load_training_config
+from training_config import training_config, training_run_name, load_training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -38,7 +38,7 @@ def main():
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
 
-        wandb.init()
+        wandb.init(name=training_run_name, config=training_config)
 
     if training_config.training == "sdxl_unet":
         from sdxl import init_sdxl
@@ -106,7 +106,7 @@ def main():
 def training_loop(
     training_parameters, parameters_to_clip, dataset, log_validation, train_step
 ):
-    optimizer = AdamW8bit(training_parameters(), lr=1e-5)
+    optimizer = AdamW8bit(training_parameters(), lr=training_config.learning_rate)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
