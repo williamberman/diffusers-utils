@@ -4,12 +4,12 @@ train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-dat
 controlnet_type: "canny"
 
 mixed_precision: fp16
-batch_size: 6
+batch_size: 4
 
 proportion_empty_prompts: 0.5
 
-validation_steps: 10
-checkpointing_steps: 100
+validation_steps: 1000
+checkpointing_steps: 1000
 validation_images:
 - ./sdxl_t2i_pose_validation/0.png
 # - ./sdxl_t2i_pose_validation/1.png
