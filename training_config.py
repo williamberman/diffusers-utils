@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+import dataclasses
 from typing import List, Literal, Optional
 
 import torch
@@ -8,6 +9,19 @@ import yaml
 DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
 DIFFUSERS_UTILS_TRAINING_CONFIG_2 = "DIFFUSERS_UTILS_TRAINING_CONFIG_2"
 
+if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
+    raise ValueError(
+        f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run."
+    )
+
+if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
+    training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2]
+else:
+    training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
+
+training_run_name = os.path.splitext(
+    os.path.basename(training_run_name)
+)[0]
 
 @dataclass
 class Config:
@@ -48,25 +62,16 @@ class Config:
     checkpointing_steps: int = 1000
     checkpoints_total_limit: int = 5
 
-training_config: Config = None
-training_run_name: str = None
+# this instance will never be reset, only the values inside it will be overwritten
+# this allows other modules to import the value once, and then call `load_training_config`
+# to re-read updated values from the config file.
+#
+# All initial default values will be immediately over written when `load_training_config` is
+# called at module initialization
+training_config: Config = Config(output_dir="NOT USED", training="sdxl_controlnet", train_shards="NOT USED")
 
 def load_training_config():
     global training_config, training_run_name
-
-    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
-        raise ValueError(
-            f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run."
-        )
-
-    if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
-        training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2]
-    else:
-        training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
-
-    training_run_name = os.path.splitext(
-        os.path.basename(training_run_name)
-    )[0]
 
     with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG], "r") as f:
         yaml_config = yaml.safe_load(f.read())
@@ -89,16 +94,20 @@ def load_training_config():
     else:
         assert False
 
-    training_config = Config(**yaml_config)
+    training_config_ = Config(**yaml_config)
 
-    if training_config.training == "sdxl_adapter":
-        if training_config.adapter_type is None:
+    if training_config_.training == "sdxl_adapter":
+        if training_config_.adapter_type is None:
             raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
 
-    if training_config.training == "sdxl_controlnet":
-        if training_config.controlnet_type is None:
+    if training_config_.training == "sdxl_controlnet":
+        if training_config_.controlnet_type is None:
             raise ValueError(
                 'must set `controlnet_type` if `training` set to "sdxl_controlnet"'
             )
+
+    # dirty set/get attr because dataclasses do not allow setting/getting via strings
+    for field in dataclasses.fields(Config):
+        setattr(training_config, field.name, getattr(training_config_, field.name))
 
 load_training_config()
