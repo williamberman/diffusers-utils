@@ -18,6 +18,7 @@ from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
+import torch.distributed as dist
 
 import wandb
 from training_config import training_config
@@ -338,14 +339,15 @@ def sdxl_train_step(batch, global_step):
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
 
-        log_predicted_images(
-            noisy_latents=noisy_latents,
-            noise=noise,
-            sigmas=sigmas,
-            model_pred=model_pred,
-            timesteps=timesteps,
-            global_step=global_step,
-        )
+        if dist.get_rank() == 0:
+            log_predicted_images(
+                noisy_latents=noisy_latents,
+                noise=noise,
+                sigmas=sigmas,
+                model_pred=model_pred,
+                timesteps=timesteps,
+                global_step=global_step,
+            )
 
     return loss
 
