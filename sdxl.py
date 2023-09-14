@@ -4,6 +4,7 @@ from typing import Literal
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import webdataset as wds
@@ -18,7 +19,6 @@ from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
-import torch.distributed as dist
 
 import wandb
 from training_config import training_config
@@ -239,13 +239,17 @@ def make_sample(d):
 
     if training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
-            controlnet_image = make_canny_conditioning(resized_and_cropped_image, return_type="vae_scaled_tensor")
+            controlnet_image = make_canny_conditioning(
+                resized_and_cropped_image, return_type="vae_scaled_tensor"
+            )
 
             sample["controlnet_image"] = controlnet_image
         elif training_config.controlnet_type == "inpainting":
             from masking import make_masked_image
 
-            controlnet_image = make_masked_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
+            controlnet_image = make_masked_image(
+                resized_and_cropped_image, return_type="vae_scaled_tensor"
+            )
 
             sample["controlnet_image"] = controlnet_image
         else:
@@ -511,7 +515,9 @@ def sdxl_log_validation(step):
                 elif training_config.controlnet_type == "inpainting":
                     from masking import make_masked_image
 
-                    validation_image = make_masked_image(validation_image, return_type="pil")
+                    validation_image = make_masked_image(
+                        validation_image, return_type="pil"
+                    )
                 else:
                     assert False
             else:
@@ -519,7 +525,10 @@ def sdxl_log_validation(step):
 
             formatted_validation_images.append(validation_image)
 
-        if training_config.control_type == "inpainting" or not _validation_images_logged:
+        if (
+            training_config.control_type == "inpainting"
+            or not _validation_images_logged
+        ):
             wandb.log(
                 {
                     "validation_conditioning": [

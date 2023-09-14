@@ -1,14 +1,19 @@
-import numpy as np
 import random
-import cv2
-from training_config import training_config
 from typing import Literal
-from PIL import Image
+
+import cv2
+import numpy as np
 import torchvision.transforms.functional as TF
+from PIL import Image
+
+from training_config import training_config
 
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
 
-def make_masked_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
+
+def make_masked_image(
+    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
+):
     mask = make_mask()
 
     image = np.array(image)
@@ -18,9 +23,7 @@ def make_masked_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = 
 
     if return_type == "vae_scaled_tensor":
         masked_image = TF.to_tensor(masked_image)
-        masked_image = TF.normalize(
-            masked_image, [0.5], [0.5]
-        )
+        masked_image = TF.normalize(masked_image, [0.5], [0.5])
     elif return_type == "pil":
         masked_image = Image.fromarray(masked_image)
     else:
@@ -28,24 +31,40 @@ def make_masked_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = 
 
     return masked_image
 
+
 def make_mask():
     mask_type = random.choice(masking_types)
 
     if mask_type == "full":
-        mask = np.ones((training_config.resolution, training_config.resolution), np.float32)
+        mask = np.ones(
+            (training_config.resolution, training_config.resolution), np.float32
+        )
     elif mask_type == "rectangle":
-        mask = make_random_rectangle_mask(training_config.resolution, training_config.resolution)
+        mask = make_random_rectangle_mask(
+            training_config.resolution, training_config.resolution
+        )
     elif mask_type == "irregular":
-        mask = make_random_irregular_mask(training_config.resolution, training_config.resolution)
+        mask = make_random_irregular_mask(
+            training_config.resolution, training_config.resolution
+        )
     elif mask_type == "outpainting":
-        mask = make_outpainting_mask(training_config.resolution, training_config.resolution)
+        mask = make_outpainting_mask(
+            training_config.resolution, training_config.resolution
+        )
     else:
         assert False
 
     return mask
 
+
 def make_random_rectangle_mask(
-    height, width, margin=10, bbox_min_size=100, bbox_max_size=512, min_times=1, max_times=2
+    height,
+    width,
+    margin=10,
+    bbox_min_size=100,
+    bbox_max_size=512,
+    min_times=1,
+    max_times=2,
 ):
     mask = np.zeros((height, width), np.float32)
 
@@ -65,7 +84,9 @@ def make_random_rectangle_mask(
     return mask
 
 
-def make_random_irregular_mask(height, width, max_angle=4, max_len=60, max_width=256, min_times=1, max_times=2):
+def make_random_irregular_mask(
+    height, width, max_angle=4, max_len=60, max_width=256, min_times=1, max_times=2
+):
     mask = np.zeros((height, width), np.float32)
 
     times = np.random.randint(min_times, max_times + 1)
@@ -84,24 +105,34 @@ def make_random_irregular_mask(height, width, max_angle=4, max_len=60, max_width
 
             brush_w = 5 + np.random.randint(max_width)
 
-            end_x = np.clip((start_x + length * np.sin(angle)).astype(np.int32), 0, width)
-            end_y = np.clip((start_y + length * np.cos(angle)).astype(np.int32), 0, height)
+            end_x = np.clip(
+                (start_x + length * np.sin(angle)).astype(np.int32), 0, width
+            )
+            end_y = np.clip(
+                (start_y + length * np.cos(angle)).astype(np.int32), 0, height
+            )
 
             choice = random.randint(0, 2)
 
             if choice == 0:
                 cv2.line(mask, (start_x, start_y), (end_x, end_y), 1.0, brush_w)
             elif choice == 1:
-                cv2.circle(mask, (start_x, start_y), radius=brush_w, color=1.0, thickness=-1)
+                cv2.circle(
+                    mask, (start_x, start_y), radius=brush_w, color=1.0, thickness=-1
+                )
             elif choice == 2:
                 radius = brush_w // 2
-                mask[start_y - radius : start_y + radius, start_x - radius : start_x + radius] = 1
+                mask[
+                    start_y - radius : start_y + radius,
+                    start_x - radius : start_x + radius,
+                ] = 1
             else:
                 assert False
 
             start_x, start_y = end_x, end_y
 
     return mask
+
 
 def make_outpainting_mask(height, width, probs=[0.5, 0.5, 0.5, 0.5]):
     mask = np.zeros((height, width), np.float32)
@@ -125,10 +156,12 @@ def make_outpainting_mask(height, width, probs=[0.5, 0.5, 0.5, 0.5]):
 
     return mask
 
+
 def get_padding(size, min_padding_percent=0.04, max_padding_percent=0.5):
     n1 = int(min_padding_percent * size)
     n2 = int(max_padding_percent * size)
     return np.random.randint(n1, n2) / size
+
 
 def apply_padding(mask, coord):
     height, width = mask.shape
