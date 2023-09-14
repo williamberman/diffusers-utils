@@ -314,7 +314,7 @@ def sdxl_train_step(batch, global_step):
             controlnet_image = batch["controlnet_image"].to(device_id)
 
             down_block_additional_residuals, mid_block_additional_residual = controlnet(
-                noisy_latents,
+                scaled_noisy_latents,
                 timesteps,
                 encoder_hidden_states=prompt_embeds,
                 added_cond_kwargs={
