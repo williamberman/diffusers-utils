@@ -124,7 +124,11 @@ def main():
         for __key__, __url__, image, prompt, metadata in src:
             t0 = time.perf_counter()
 
-            openpose_image = run_openpose(openpose, image)
+            try:
+                openpose_image = run_openpose(openpose, image)
+            except Exception as e:
+                logger.warning(e)
+                continue
 
             logger.warning(f"shard {shard}: {time.perf_counter() - t0}")
 
