@@ -7,7 +7,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 import webdataset as wds
-from controlnet_aux import OpenposeDetector
+from controlnet_aux import OpenposeDetector, DWposeDetector
 from controlnet_aux.open_pose import draw_poses
 from controlnet_aux.util import HWC3
 from PIL import Image
@@ -40,10 +40,22 @@ def main():
             " the env vars `$SLURM_NTASKS` and `$SLURM_PROCID`."
         ),
     )
+    args.add_argument(
+        "--pose_algorithm",
+        required=False,
+        choices=["openpose", "dwpose"],
+        default="openpose"
+    )
     args = args.parse_args()
 
     dataset = "s3://muse-datasets/laion-aesthetic6plus-min512-data"
-    upload_to = "s3://muse-datasets/laion-aesthetic6plus-min512-data-openpose"
+
+    if args.pose_algorithm == "openpose":
+        upload_to = "s3://muse-datasets/laion-aesthetic6plus-min512-data-openpose"
+    elif args.pose_algorithm == "dwpose":
+        upload_to = "s3://muse-datasets/laion-aesthetic6plus-min512-data-dwpose"
+    else:
+        assert False
 
     logger.warning("********************")
     logger.warning("Pre-encoding dataset")
@@ -79,8 +91,13 @@ def main():
             )
         logger.warning("************")
 
-    openpose = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
-    openpose.to(f"cuda")
+    if args.pose_algorithm == "openpose":
+        pose_algo_instance = OpenposeDetector.from_pretrained("lllyasviel/ControlNet")
+        pose_algo_instance.to(f"cuda")
+    elif args.pose_algorithm == "dwpose":
+        pose_algo_instance = DWposeDetector(device="cuda")
+    else:
+        assert False
 
     for shard in range(args.start_shard, args.end_shard + 1):
         download_command = (
@@ -125,20 +142,28 @@ def main():
             t0 = time.perf_counter()
 
             try:
-                openpose_image = run_openpose(openpose, image)
+                if args.pose_algorithm == "openpose":
+                    pose_image = run_openpose(pose_algo_instance, image)
+                elif args.pose_algorithm == "dwpose":
+                    pose_image = pose_algo_instance(image)
+
+                    if (np.array(pose_image) == 0).all():
+                        pose_image = None
+                else:
+                    assert False
             except Exception as e:
                 logger.warning(e)
                 continue
 
             logger.warning(f"shard {shard}: {time.perf_counter() - t0}")
 
-            if openpose_image is None:
+            if pose_image is None:
                 continue
 
             sample = {
                 "__key__": __key__,
                 "png": image,
-                "openpose.png": openpose_image,
+                "pose.png": pose_image,
                 "txt": prompt,
                 "json": metadata,
             }
