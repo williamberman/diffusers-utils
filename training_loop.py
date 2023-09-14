@@ -213,6 +213,8 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
     os.makedirs(save_path, exist_ok=True)
 
+    torch.save(optimizer.state_dict(), os.path.join(save_path, "optimizer.bin"))
+
     if training_config.training == "sdxl_adapter":
         from sdxl import adapter
 
@@ -227,8 +229,6 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
         controlnet.module.save_pretrained(save_path)
     else:
         assert False
-
-    torch.save(optimizer.state_dict(), os.path.join(save_path, "optimizer.bin"))
 
     logger.info(f"Saved state to {save_path}")
 
