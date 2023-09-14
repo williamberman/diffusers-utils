@@ -17,6 +17,7 @@ import wandb
 from training_config import training_config, load_training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 logger = getLogger(__name__)
 
@@ -30,6 +31,8 @@ device_id = int(os.environ["LOCAL_RANK"])
 
 
 def main():
+    torch.cuda.set_device(device_id)
+
     dist.init_process_group("nccl")
 
     if dist.get_rank() == 0:
