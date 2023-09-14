@@ -1,4 +1,4 @@
-output_dir: "./output/sdxl_controlnet_canny"
+output_dir: "./output/sdxl_controlnet_inpaint"
 training: "sdxl_controlnet"
 train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
 controlnet_type: "inpainting"
@@ -9,15 +9,25 @@ batch_size: 4
 proportion_empty_prompts: 0.5
 
 validation_steps: 500
-checkpointing_steps: 1000
+checkpointing_steps: 500
 validation_images:
 - ./validation_data/person_jumping.png
-# - ./validation_data/person_running.png
-# - ./validation_data/person_standing_with_arms_crossed.png
-# - ./validation_data/person_sitting_on_bench.png
+- ./validation_data/bright_room_with_chair.png
+- ./validation_data/couple_sitting_on_bench_infront_of_lake.png
+- ./validation_data/house_in_snowy_mountains.png
+- ./validation_data/hq_woman.png
+- ./validation_data/man_skating.png
+- ./validation_data/painting_of_rice_paddies.png
+- ./validation_data/tornado_at_sea.png
+- ./validation_data/two_birds_on_branch.png
 validation_prompts:
 - "superman"
-- "spiderman"
-- "elon musk"
-- "jerry seinfeld"
+- "bright room with chair"
+- "couple sitting on bench infront of lake"
+- "house in snowy mountains"
+- "a beautiful woman"
+- "a man skating in brooklyn"
+- "a painting of people working the rice paddies"
+- "a tornado in ohio"
+- "two birds on a branch"
 num_validation_images: 1

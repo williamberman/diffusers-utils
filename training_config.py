@@ -70,7 +70,7 @@ def load_training_config():
     else:
         assert False
 
-    training_config: Config = Config(**yaml_config)
+    training_config = Config(**yaml_config)
 
     if training_config.training == "sdxl_adapter":
         if training_config.adapter_type is None:
