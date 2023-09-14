@@ -79,17 +79,28 @@ def init_sdxl():
 
     scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
-    if training_config.training == "sdxl_unet" and training_config.resume_from is not None:
-        unet_repo = training_config.resume_from
-    else:
-        unet_repo = repo
+    if training_config.training == "sdxl_unet":
+        if training_config.resume_from is not None:
+            unet_repo = training_config.resume_from
+        else:
+            unet_repo = repo
 
-    unet = UNet2DConditionModel.from_pretrained(
-        unet_repo,
-        subfolder="unet",
-    )
+        unet = UNet2DConditionModel.from_pretrained(
+            unet_repo,
+            subfolder="unet",
+        )
+    else:
+        unet = UNet2DConditionModel.from_pretrained(
+            repo,
+            subfolder="unet",
+            variant="fp16",
+            torch_dtype=torch.float16,
+        )
+
+
     unet.to(device=device_id)
     unet.enable_xformers_memory_efficient_attention()
+    unet.enable_gradient_checkpointing()
 
     if training_config.training == "sdxl_unet":
         unet.requires_grad_(True)
@@ -129,6 +140,7 @@ def init_sdxl():
         controlnet.train()
         controlnet.requires_grad_(True)
         controlnet.enable_xformers_memory_efficient_attention()
+        controlnet.enable_gradient_checkpointing()
         controlnet = DDP(controlnet, device_ids=[device_id])
 
 

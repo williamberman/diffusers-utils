@@ -4,7 +4,7 @@ train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-dat
 controlnet_type: "inpainting"
 
 mixed_precision: fp16
-batch_size: 4
+batch_size: 7
 
 proportion_empty_prompts: 0.5
 
