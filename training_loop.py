@@ -26,6 +26,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+device_id = int(os.environ["LOCAL_RANK"])
+
 
 def main():
     dist.init_process_group("nccl")
@@ -237,29 +239,8 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
 
 def load_checkpoint(resume_from, optimizer):
-    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"))
+    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id))
     optimizer.load_state_dict(optimizer_state_dict)
-
-    if training_config.training == "sdxl_adapter":
-        from sdxl import adapter
-
-        state_dict = load_safetensors_state_dict(
-            os.path.join(resume_from, "adapter", "diffusion_pytorch_model.safetensors")
-        )
-
-        adapter.module.load_state_dict(state_dict)
-    elif training_config.training == "sdxl_controlnet":
-        from sdxl import controlnet
-
-        state_dict = load_safetensors_state_dict(
-            os.path.join(
-                resume_from, "controlnet", "diffusion_pytorch_model.safetensors"
-            )
-        )
-
-        controlnet.module.load_state_dict(state_dict)
-    else:
-        assert False
 
 
 def load_safetensors_state_dict(filename):

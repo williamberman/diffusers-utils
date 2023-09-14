@@ -79,8 +79,13 @@ def init_sdxl():
 
     scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
 
+    if training_config.training == "sdxl_unet" and training_config.resume_from is not None:
+        unet_repo = training_config.resume_from
+    else:
+        unet_repo = repo
+
     unet = UNet2DConditionModel.from_pretrained(
-        repo,
+        unet_repo,
         subfolder="unet",
     )
     unet.to(device=device_id)
@@ -95,13 +100,18 @@ def init_sdxl():
         unet.eval()
 
     if training_config.training == "sdxl_adapter":
-        adapter = T2IAdapter(
-            in_channels=3,
-            channels=(320, 640, 1280, 1280),
-            num_res_blocks=2,
-            downscale_factor=16,
-            adapter_type="full_adapter_xl",
-        )
+        if training_config.resume_from is None:
+            adapter = T2IAdapter(
+                in_channels=3,
+                channels=(320, 640, 1280, 1280),
+                num_res_blocks=2,
+                downscale_factor=16,
+                adapter_type="full_adapter_xl",
+            )
+        else:
+            adapter_repo = os.path.join(training_config.resume_from, "adapter")
+            adapter = T2IAdapter.from_pretrained(adapter_repo)
+
         adapter.to(device=device_id)
         adapter.train()
         adapter.requires_grad_(True)
@@ -109,7 +119,12 @@ def init_sdxl():
         adapter = DDP(adapter, device_ids=[device_id])
 
     if training_config.training == "sdxl_controlnet":
-        controlnet = ControlNetModel.from_unet(unet)
+        if training_config.resume_from is None:
+            controlnet = ControlNetModel.from_unet(unet)
+        else:
+            controlnet_repo = os.path.join(training_config.resume_from, "controlnet")
+            controlnet = ControlNetModel.from_pretrained(controlnet_repo)
+
         controlnet.to(device=device_id)
         controlnet.train()
         controlnet.requires_grad_(True)
@@ -526,7 +541,7 @@ def sdxl_log_validation(step):
             formatted_validation_images.append(validation_image)
 
         if (
-            training_config.control_type == "inpainting"
+            training_config.controlnet_type == "inpainting"
             or not _validation_images_logged
         ):
             wandb.log(
