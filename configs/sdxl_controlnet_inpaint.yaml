@@ -1,0 +1,23 @@
+output_dir: "./output/sdxl_controlnet_canny"
+training: "sdxl_controlnet"
+train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
+controlnet_type: "inpainting"
+
+mixed_precision: fp16
+batch_size: 4
+
+proportion_empty_prompts: 0.5
+
+validation_steps: 500
+checkpointing_steps: 1000
+validation_images:
+- ./sdxl_t2i_pose_validation/0.png
+- ./sdxl_t2i_pose_validation/1.png
+- ./sdxl_t2i_pose_validation/2.png
+- ./sdxl_t2i_pose_validation/3.png
+validation_prompts:
+- "superman"
+- "spiderman"
+- "elon musk"
+- "jerry seinfeld"
+num_validation_images: 1

@@ -18,7 +18,8 @@ class Config:
     adapter_conditioning_scale: float = 1.0
     adapter_conditioning_factor: float = 1.0
 
-    controlnet_type: Optional[Literal["canny"]] = None
+    # `training_config.training == "sdxl_controlnet"` specific config
+    controlnet_type: Optional[Literal["canny", "inpainting"]] = None
 
     # core training config
     gradient_accumulation_steps: int = 1

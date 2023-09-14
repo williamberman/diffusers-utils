@@ -239,7 +239,13 @@ def make_sample(d):
 
     if training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
-            controlnet_image = make_canny_conditioning(resized_and_cropped_image)
+            controlnet_image = make_canny_conditioning(resized_and_cropped_image, return_type="vae_scaled_tensor")
+
+            sample["controlnet_image"] = controlnet_image
+        elif training_config.controlnet_type == "inpainting":
+            from masking import make_masked_image
+
+            controlnet_image = make_masked_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
 
             sample["controlnet_image"] = controlnet_image
         else:
@@ -502,6 +508,10 @@ def sdxl_log_validation(step):
                     validation_image = make_canny_conditioning(
                         validation_image, return_type="pil"
                     )
+                elif training_config.controlnet_type == "inpainting":
+                    from masking import make_masked_image
+
+                    validation_image = make_masked_image(validation_image, return_type="pil")
                 else:
                     assert False
             else:
@@ -509,7 +519,7 @@ def sdxl_log_validation(step):
 
             formatted_validation_images.append(validation_image)
 
-        if not _validation_images_logged:
+        if training_config.control_type == "inpainting" or not _validation_images_logged:
             wandb.log(
                 {
                     "validation_conditioning": [
