@@ -11,13 +11,23 @@ proportion_empty_prompts: 0.5
 validation_steps: 500
 checkpointing_steps: 1000
 validation_images:
-- ./sdxl_t2i_pose_validation/0.png
-# - ./sdxl_t2i_pose_validation/1.png
-# - ./sdxl_t2i_pose_validation/2.png
-# - ./sdxl_t2i_pose_validation/3.png
+- ./validation_data/person_jumping.png
+- ./validation_data/bright_room_with_chair.png
+- ./validation_data/couple_sitting_on_bench_infront_of_lake.png
+- ./validation_data/house_in_snowy_mountains.png
+- ./validation_data/hq_woman.png
+- ./validation_data/man_skating.png
+- ./validation_data/painting_of_rice_paddies.png
+- ./validation_data/tornado_at_sea.png
+- ./validation_data/two_birds_on_branch.png
 validation_prompts:
 - "superman"
-# - "spiderman"
-# - "elon musk"
-# - "jerry seinfeld"
+- "bright room with chair"
+- "couple sitting on bench infront of lake"
+- "house in snowy mountains"
+- "a beautiful woman"
+- "a man skating in brooklyn"
+- "a painting of people working the rice paddies"
+- "a tornado in ohio"
+- "two birds on a branch"
 num_validation_images: 1
