@@ -19,6 +19,7 @@ def make_masked_image(
     image = np.array(image)
 
     # remove where mask is set to 1
+    mask = mask[:, :, None]
     masked_image = image * (mask < 0.5)
 
     if return_type == "vae_scaled_tensor":
