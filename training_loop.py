@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
-from training_config import training_config
+from training_config import training_config, load_training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -183,6 +183,9 @@ def training_loop(
             }
             progress_bar.set_postfix(**logs)
             wandb.log(logs, step=global_step)
+
+        if global_step % 10 == 0:
+            load_training_config()
 
         if global_step >= training_config.max_train_steps:
             break
