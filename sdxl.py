@@ -574,7 +574,7 @@ def sdxl_log_validation(step):
 
                 wandb_validation_images.append(validation_image)
 
-            wandb.log({"validation_conditioning": wandb_validation_images})
+            wandb.log({"validation_conditioning": wandb_validation_images}, step=step)
 
             _validation_images_logged = True
 
