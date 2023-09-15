@@ -35,8 +35,6 @@ def make_masked_image(
     mask = torch.from_numpy(mask)
     mask = mask[None, :, :]
 
-    image = np.array(image)
-
     image = TF.to_tensor(image)
 
     # where mask is set to 1, set to -1 "special" masked image pixel.
