@@ -5,32 +5,46 @@ import cv2
 import numpy as np
 import torchvision.transforms.functional as TF
 from PIL import Image
+import torch
 
 from training_config import training_config
 
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
 
+# NOTE that this pil image cannot be used with the actual
+# network because it uses 0 for the masked pixel insted of -1.
+# It is used just for logging the masked image
+def masked_image_as_pil(image: torch.Tensor) -> Image.Image:
+    mask = image == -1
+    image = image * (mask < 0.5)
+    image = (image * 255).clamp(0, 255)
+    image = image.to(torch.uint8)
+    image = image.permute(1, 2, 0)
+    image = image.cpu().numpy()
+    image = Image.fromarray(image)
+    return image
+
 
 def make_masked_image(
-    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
+    image, return_type: Literal["controlnet_scaled_tensor"] = "controlnet_scaled_tensor"
 ):
+    assert return_type == "controlnet_scaled_tensor"
+
     mask = make_mask()
+    mask = torch.from_numpy(mask)
+    mask = mask[None, :, :]
 
     image = np.array(image)
 
-    # remove where mask is set to 1
-    mask = mask[:, :, None]
-    masked_image = image * (mask < 0.5)
+    image = TF.to_tensor(image)
 
-    if return_type == "vae_scaled_tensor":
-        masked_image = TF.to_tensor(masked_image)
-        masked_image = TF.normalize(masked_image, [0.5], [0.5])
-    elif return_type == "pil":
-        masked_image = Image.fromarray(masked_image)
-    else:
-        assert False
+    # where mask is set to 1, set to -1 "special" masked image pixel. 
+    # -1 is outside of the 0-1 range that the controlnet normalized 
+    # input is in.
+    image = image * (mask < 0.5) + -1.0 * (mask > 0.5)
 
-    return masked_image
+
+    return image
 
 
 def make_mask():

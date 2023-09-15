@@ -267,7 +267,7 @@ def make_sample(d):
     if training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
             controlnet_image = make_canny_conditioning(
-                resized_and_cropped_image, return_type="vae_scaled_tensor"
+                resized_and_cropped_image, return_type="controlnet_scaled_tensor"
             )
 
             sample["controlnet_image"] = controlnet_image
@@ -275,7 +275,7 @@ def make_sample(d):
             from masking import make_masked_image
 
             controlnet_image = make_masked_image(
-                resized_and_cropped_image, return_type="vae_scaled_tensor"
+                resized_and_cropped_image, return_type="controlnet_scaled_tensor"
             )
 
             sample["controlnet_image"] = controlnet_image
@@ -543,8 +543,12 @@ def sdxl_log_validation(step):
                     from masking import make_masked_image
 
                     validation_image = make_masked_image(
-                        validation_image, return_type="pil"
+                        validation_image, return_type="controlnet_scaled_tensor"
                     )
+
+                    validation_image = validation_image[None, :, :, :]
+
+                    validation_image = validation_image.to('cuda')
                 else:
                     assert False
             else:
@@ -552,17 +556,25 @@ def sdxl_log_validation(step):
 
             formatted_validation_images.append(validation_image)
 
-        if (
-            training_config.controlnet_type == "inpainting"
-            or not _validation_images_logged
-        ):
+        if (training_config.controlnet_type == "inpainting" or not _validation_images_logged):
+            wandb_validation_images = []
+
+            for validation_image in formatted_validation_images:
+                if training_config.controlnet_type == "inpainting":
+                    from masking import masked_image_as_pil
+
+                    validation_image = masked_image_as_pil(validation_image[0])
+
+                validation_image = wandb.Image(validation_image)
+
+                wandb_validation_images.append(validation_image)
+
             wandb.log(
                 {
-                    "validation_conditioning": [
-                        wandb.Image(image) for image in formatted_validation_images
-                    ]
+                    "validation_conditioning": wandb_validation_images
                 }
             )
+
             _validation_images_logged = True
 
     generator = torch.Generator().manual_seed(0)
@@ -632,7 +644,7 @@ def maybe_ddp_module(m):
 
 
 def make_canny_conditioning(
-    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
+    image, return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor"
 ):
     import cv2
 
@@ -643,7 +655,7 @@ def make_canny_conditioning(
         [controlnet_image, controlnet_image, controlnet_image], axis=2
     )
 
-    if return_type == "vae_scaled_tensor":
+    if return_type == "controlnet_scaled_tensor":
         controlnet_image = TF.to_tensor(controlnet_image)
     elif return_type == "pil":
         controlnet_image = Image.fromarray(controlnet_image)
