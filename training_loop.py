@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
-from training_config import (load_training_config, training_config)
+from training_config import load_training_config, training_config
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -38,7 +38,11 @@ def main():
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
 
-        wandb.init(name=training_config.training_run_name, project=training_config.project_name, config=training_config)
+        wandb.init(
+            name=training_config.training_run_name,
+            project=training_config.project_name,
+            config=training_config,
+        )
 
     if training_config.training == "sdxl_unet":
         from sdxl import init_sdxl

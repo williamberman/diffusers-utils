@@ -1,7 +1,7 @@
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Dict
+from typing import Dict, List, Literal, Optional
 
 import torch
 import yaml
@@ -82,8 +82,10 @@ def load_training_config():
         override_config_key = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE]
 
         if override_config_key not in override_configs:
-            raise ValueError(f"{override_config_key} is not one of the available overrides {override_configs.keys()}")
-            
+            raise ValueError(
+                f"{override_config_key} is not one of the available overrides {override_configs.keys()}"
+            )
+
         yaml_config.update(override_configs[override_config_key])
 
     if (

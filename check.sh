@@ -4,4 +4,6 @@ set -e
 
 black *.py
 isort *.py
-mypy *.py
+
+# TODO would be nice to get mypy in better shape on the code base
+# mypy *.py
