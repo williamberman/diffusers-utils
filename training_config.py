@@ -1,25 +1,18 @@
 import dataclasses
 import os
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict
 
 import torch
 import yaml
 
 DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
-DIFFUSERS_UTILS_TRAINING_CONFIG_2 = "DIFFUSERS_UTILS_TRAINING_CONFIG_2"
+DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE = "DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE"
 
 if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
     raise ValueError(
         f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run."
     )
-
-if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
-    training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2]
-else:
-    training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
-
-training_run_name = os.path.splitext(os.path.basename(training_run_name))[0]
 
 
 @dataclass
@@ -61,6 +54,10 @@ class Config:
     checkpointing_steps: int = 1000
     checkpoints_total_limit: int = 5
 
+    # wandb
+    project_name: Optional[str] = None
+    training_run_name: Optional[str] = None
+
 
 # this instance will never be reset, only the values inside it will be overwritten
 # this allows other modules to import the value once, and then call `load_training_config`
@@ -77,12 +74,17 @@ def load_training_config():
     global training_config, training_run_name
 
     with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG], "r") as f:
-        yaml_config = yaml.safe_load(f.read())
+        yaml_config: Dict = yaml.safe_load(f.read())
 
-    if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
-        with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_2], "r") as f:
-            yaml_config_2 = yaml.safe_load(f.read())
-            yaml_config.update(yaml_config_2)
+    override_configs = yaml_config.pop("overrides", {})
+
+    if DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE in os.environ:
+        override_config_key = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE]
+
+        if override_config_key not in override_configs:
+            raise ValueError(f"{override_config_key} is not one of the available overrides {override_configs.keys()}")
+            
+        yaml_config.update(override_configs[override_config_key])
 
     if (
         "mixed_precision" not in yaml_config

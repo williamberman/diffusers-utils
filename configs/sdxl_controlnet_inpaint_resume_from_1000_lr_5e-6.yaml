@@ -1,4 +1,0 @@
-learning_rate: 0.000005
-resume_from: /fsx/william/diffusers-utils/output/sdxl_controlnet_inpaint_checkpoint_1000
-start_step: 1000
-output_dir: "./output/sdxl_controlnet_inpaint_resume_from_1000_lr_5e-6"
