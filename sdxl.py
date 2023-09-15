@@ -600,11 +600,8 @@ def sdxl_log_validation(step):
             ] = training_config.adapter_conditioning_factor
 
         with torch.autocast("cuda"):
-            output_validation_images += pipeline(**args).images
-
-    output_validation_images = [
-        wandb.Image(image) for image in output_validation_images
-    ]
+            image = pipeline(**args).images[0]
+            output_validation_images.append(wandb.Image(image, caption=validation_prompt))
 
     wandb.log({"validation": output_validation_images}, step=step)
 
