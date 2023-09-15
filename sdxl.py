@@ -97,7 +97,6 @@ def init_sdxl():
             torch_dtype=torch.float16,
         )
 
-
     unet.to(device=device_id)
     unet.enable_xformers_memory_efficient_attention()
     unet.enable_gradient_checkpointing()
@@ -548,7 +547,7 @@ def sdxl_log_validation(step):
 
                     validation_image = validation_image[None, :, :, :]
 
-                    validation_image = validation_image.to('cuda')
+                    validation_image = validation_image.to("cuda")
                 else:
                     assert False
             else:
@@ -556,7 +555,10 @@ def sdxl_log_validation(step):
 
             formatted_validation_images.append(validation_image)
 
-        if (training_config.controlnet_type == "inpainting" or not _validation_images_logged):
+        if (
+            training_config.controlnet_type == "inpainting"
+            or not _validation_images_logged
+        ):
             wandb_validation_images = []
 
             for validation_image in formatted_validation_images:
@@ -569,11 +571,7 @@ def sdxl_log_validation(step):
 
                 wandb_validation_images.append(validation_image)
 
-            wandb.log(
-                {
-                    "validation_conditioning": wandb_validation_images
-                }
-            )
+            wandb.log({"validation_conditioning": wandb_validation_images})
 
             _validation_images_logged = True
 
@@ -644,7 +642,10 @@ def maybe_ddp_module(m):
 
 
 def make_canny_conditioning(
-    image, return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor"
+    image,
+    return_type: Literal[
+        "controlnet_scaled_tensor", "pil"
+    ] = "controlnet_scaled_tensor",
 ):
     import cv2
 

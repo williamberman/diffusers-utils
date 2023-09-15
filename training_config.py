@@ -1,6 +1,6 @@
+import dataclasses
 import os
 from dataclasses import dataclass
-import dataclasses
 from typing import List, Literal, Optional
 
 import torch
@@ -19,9 +19,8 @@ if DIFFUSERS_UTILS_TRAINING_CONFIG_2 in os.environ:
 else:
     training_run_name = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
 
-training_run_name = os.path.splitext(
-    os.path.basename(training_run_name)
-)[0]
+training_run_name = os.path.splitext(os.path.basename(training_run_name))[0]
+
 
 @dataclass
 class Config:
@@ -62,13 +61,17 @@ class Config:
     checkpointing_steps: int = 1000
     checkpoints_total_limit: int = 5
 
+
 # this instance will never be reset, only the values inside it will be overwritten
 # this allows other modules to import the value once, and then call `load_training_config`
 # to re-read updated values from the config file.
 #
 # All initial default values will be immediately over written when `load_training_config` is
 # called at module initialization
-training_config: Config = Config(output_dir="NOT USED", training="sdxl_controlnet", train_shards="NOT USED")
+training_config: Config = Config(
+    output_dir="NOT USED", training="sdxl_controlnet", train_shards="NOT USED"
+)
+
 
 def load_training_config():
     global training_config, training_run_name
@@ -98,7 +101,9 @@ def load_training_config():
 
     if training_config_.training == "sdxl_adapter":
         if training_config_.adapter_type is None:
-            raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
+            raise ValueError(
+                'must set `adapter_type` if `training` set to "sdxl_adapter"'
+            )
 
     if training_config_.training == "sdxl_controlnet":
         if training_config_.controlnet_type is None:
@@ -109,5 +114,6 @@ def load_training_config():
     # dirty set/get attr because dataclasses do not allow setting/getting via strings
     for field in dataclasses.fields(Config):
         setattr(training_config, field.name, getattr(training_config_, field.name))
+
 
 load_training_config()

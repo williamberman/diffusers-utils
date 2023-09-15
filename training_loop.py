@@ -14,7 +14,8 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 import wandb
-from training_config import training_config, training_run_name, load_training_config
+from training_config import (load_training_config, training_config,
+                             training_run_name)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -242,7 +243,9 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
 
 def load_checkpoint(resume_from, optimizer):
-    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id))
+    optimizer_state_dict = torch.load(
+        os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id)
+    )
     optimizer.load_state_dict(optimizer_state_dict)
 
 

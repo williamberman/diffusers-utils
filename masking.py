@@ -3,13 +3,14 @@ from typing import Literal
 
 import cv2
 import numpy as np
+import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
-import torch
 
 from training_config import training_config
 
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
+
 
 # NOTE that this pil image cannot be used with the actual
 # network because it uses 0 for the masked pixel insted of -1.
@@ -38,11 +39,10 @@ def make_masked_image(
 
     image = TF.to_tensor(image)
 
-    # where mask is set to 1, set to -1 "special" masked image pixel. 
-    # -1 is outside of the 0-1 range that the controlnet normalized 
+    # where mask is set to 1, set to -1 "special" masked image pixel.
+    # -1 is outside of the 0-1 range that the controlnet normalized
     # input is in.
     image = image * (mask < 0.5) + -1.0 * (mask > 0.5)
-
 
     return image
 
