@@ -7,8 +7,6 @@ import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 
-from training_config import training_config
-
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
 
 
@@ -31,7 +29,7 @@ def make_masked_image(
 ):
     assert return_type == "controlnet_scaled_tensor"
 
-    mask = make_mask()
+    mask = make_mask(image.height, image.width)
     mask = torch.from_numpy(mask)
     mask = mask[None, :, :]
 
@@ -45,24 +43,24 @@ def make_masked_image(
     return image
 
 
-def make_mask():
+def make_mask(height, width):
     mask_type = random.choice(masking_types)
 
     if mask_type == "full":
         mask = np.ones(
-            (training_config.resolution, training_config.resolution), np.float32
+            (height, width), np.float32
         )
     elif mask_type == "rectangle":
         mask = make_random_rectangle_mask(
-            training_config.resolution, training_config.resolution
+            height, width
         )
     elif mask_type == "irregular":
         mask = make_random_irregular_mask(
-            training_config.resolution, training_config.resolution
+            height, width
         )
     elif mask_type == "outpainting":
         mask = make_outpainting_mask(
-            training_config.resolution, training_config.resolution
+            height, width
         )
     else:
         assert False
