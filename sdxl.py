@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Literal
+from typing import Literal, Union
 
 import numpy as np
 import torch
@@ -8,11 +8,10 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import webdataset as wds
-from diffusers import (AutoencoderKL, ControlNetModel, EulerDiscreteScheduler,
+from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
                        StableDiffusionXLControlNetPipeline,
-                       StableDiffusionXLPipeline, T2IAdapter,
-                       UNet2DConditionModel)
+                       StableDiffusionXLPipeline, T2IAdapter)
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
@@ -21,6 +20,9 @@ from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
 
 import wandb
+from sdxl_controlnet import SDXLControlNet
+from sdxl_controlnet_full import SDXLControlNetFull
+from sdxl_unet import SDXLUNet
 from training_config import training_config
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
@@ -37,13 +39,13 @@ tokenizer_two = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer_2")
 
 text_encoder_two: CLIPTextModelWithProjection = None
 
-unet: UNet2DConditionModel = None
+unet: SDXLUNet = None
 
 scheduler: EulerDiscreteScheduler = None
 
 adapter: T2IAdapter = None
 
-controlnet: ControlNetModel
+controlnet: Union[SDXLControlNet, SDXLControlNetFull]
 
 _init_sdxl_called = False
 
@@ -79,12 +81,12 @@ def init_sdxl():
         else:
             unet_repo = repo
 
-        unet = UNet2DConditionModel.from_pretrained(
+        unet = SDXLUNet.from_pretrained(
             unet_repo,
             subfolder="unet",
         )
     else:
-        unet = UNet2DConditionModel.from_pretrained(
+        unet = SDXLUNet.from_pretrained(
             repo,
             subfolder="unet",
             variant="fp16",
@@ -92,8 +94,8 @@ def init_sdxl():
         )
 
     unet.to(device=device_id)
-    unet.enable_xformers_memory_efficient_attention()
-    unet.enable_gradient_checkpointing()
+    # TODO - add back
+    # unet.enable_gradient_checkpointing()
 
     if training_config.training == "sdxl_unet":
         unet.requires_grad_(True)
@@ -123,17 +125,24 @@ def init_sdxl():
         adapter = DDP(adapter, device_ids=[device_id])
 
     if training_config.training == "sdxl_controlnet":
+        if training_config.controlnet_variant == "default":
+            controlnet_cls = SDXLControlNet
+        elif training_config.controlnet_variant == "full":
+            controlnet_cls = SDXLControlNetFull
+        else:
+            assert False
+
         if training_config.resume_from is None:
-            controlnet = ControlNetModel.from_unet(unet)
+            controlnet = controlnet_cls.from_unet(unet)
         else:
             controlnet_repo = os.path.join(training_config.resume_from, "controlnet")
-            controlnet = ControlNetModel.from_pretrained(controlnet_repo)
+            controlnet = controlnet_cls.from_pretrained(controlnet_repo)
 
         controlnet.to(device=device_id)
         controlnet.train()
         controlnet.requires_grad_(True)
-        controlnet.enable_xformers_memory_efficient_attention()
-        controlnet.enable_gradient_checkpointing()
+        # TODO add back
+        # controlnet.enable_gradient_checkpointing()
         controlnet = DDP(controlnet, device_ids=[device_id])
 
 
@@ -313,6 +322,8 @@ def sdxl_train_step(batch, global_step):
     ):
         down_block_additional_residuals = None
         mid_block_additional_residual = None
+        add_to_down_block_inputs = None
+        add_to_output = None
 
         if training_config.training == "sdxl_adapter":
             adapter_image = batch["adapter_image"].to(device_id)
@@ -324,7 +335,7 @@ def sdxl_train_step(batch, global_step):
         if training_config.training == "sdxl_controlnet":
             controlnet_image = batch["controlnet_image"].to(device_id)
 
-            down_block_additional_residuals, mid_block_additional_residual = controlnet(
+            down_block_additional_residuals, mid_block_additional_residual, add_to_down_block_inputs, add_to_output = controlnet(
                 scaled_noisy_latents,
                 timesteps,
                 encoder_hidden_states=prompt_embeds,
@@ -346,6 +357,8 @@ def sdxl_train_step(batch, global_step):
             },
             down_block_additional_residuals=down_block_additional_residuals,
             mid_block_additional_residual=mid_block_additional_residual,
+            add_to_down_block_inputs=add_to_down_block_inputs,
+            add_to_output=add_to_output,
         ).sample
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")

@@ -2,7 +2,6 @@ import torch
 from diffusers import (
     StableDiffusionXLControlNetPipeline,
     AutoencoderKL,
-    ControlNetModel,
     UNet2DConditionModel
 )
 from argparse import ArgumentParser

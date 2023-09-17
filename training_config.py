@@ -25,8 +25,10 @@ class Config:
     adapter_conditioning_scale: float = 1.0
     adapter_conditioning_factor: float = 1.0
 
+    # TODO: bad naming
     # `training_config.training == "sdxl_controlnet"` specific config
     controlnet_type: Optional[Literal["canny", "inpainting"]] = None
+    controlnet_variant: Literal["default", "full"] = "default"
 
     # core training config
     learning_rate: float = 0.00001
