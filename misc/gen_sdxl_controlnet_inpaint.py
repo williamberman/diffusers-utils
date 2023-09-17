@@ -3,12 +3,13 @@ from diffusers import (
     StableDiffusionXLControlNetPipeline,
     AutoencoderKL,
     ControlNetModel,
+    UNet2DConditionModel
 )
 from argparse import ArgumentParser
 from PIL import Image
 from typing import List
 from masking import make_masked_image, masked_image_as_pil
-from controlnet import SDXLControlNet
+from blocks import SDXLControlNet, SDXLUNet
 from utils import load_safetensors_state_dict
 
 
@@ -16,6 +17,14 @@ def main():
     args = ArgumentParser()
     args.add_argument("--controlnet_path", required=True, type=str)
     args = args.parse_args()
+
+    unet_ = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
+
+    unet = SDXLUNet()
+    unet.load_state_dict(unet_.state_dict())
+    unet.to(dtype=torch.float16)
+
+    del unet_
 
     # controlnet = ControlNetModel.from_pretrained(
     #     args.controlnet_path, torch_dtype=torch.float16
@@ -33,6 +42,7 @@ def main():
         torch_dtype=torch.float16,
         variant="fp16",
         use_safetensors=True,
+        unet=unet,
         vae=vae,
         controlnet=controlnet,
     )
