@@ -244,6 +244,12 @@ class SDXLControlNet(ControlNetModel):
         controlnet.load_state_dict(diffusers_controlnet.state_dict())
         return controlnet
 
+    def save_pretrained(self, *args, **kwargs):
+        diffusers_controlnet = ControlNetModel.from_pretrained("diffusers/controlnet-canny-sdxl-1.0")
+        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
+        diffusers_controlnet.load_state_dict(sd)
+        diffusers_controlnet.save_pretrained(*args, **kwargs)
+
     @classmethod
     def from_unet(cls, unet):
         controlnet = cls()

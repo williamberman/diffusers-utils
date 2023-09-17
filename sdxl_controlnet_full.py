@@ -1,3 +1,6 @@
+import os
+
+import safetensors.torch
 import torch
 import torch.nn.functional as F
 from diffusers import ControlNetModel
@@ -5,7 +8,7 @@ from torch import nn
 
 from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
 from sdxl_controlnet import ControlNetOutput
-from utils import zero_module
+from utils import load_safetensors_state_dict, zero_module
 
 
 class SDXLControlNetFull(ControlNetModel):
@@ -306,11 +309,17 @@ class SDXLControlNetFull(ControlNetModel):
         return next(self.parameters()).dtype
 
     @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained(*args, **kwargs)
+    def from_pretrained(cls, load_path):
+        load_path = os.path.join(load_path, "diffusion_pytorch_model.safetensors")
+        sd = load_safetensors_state_dict(load_path)
         controlnet = cls()
-        controlnet.load_state_dict(diffusers_controlnet.state_dict())
+        controlnet.load_state_dict(sd)
         return controlnet
+
+    def save_pretrained(self, save_path):
+        save_path = os.path.join(save_path, "diffusion_pytorch_model.safetensors")
+        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
+        safetensors.torch.save_file(sd, save_path)
 
     @classmethod
     def from_unet(cls, unet):

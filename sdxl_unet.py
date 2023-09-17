@@ -276,3 +276,9 @@ class SDXLUNet(UNet2DConditionModel):
         unet = cls()
         unet.load_state_dict(diffusers_unet.state_dict())
         return unet
+
+    def save_pretrained(self, *args, **kwargs):
+        diffusers_unet = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
+        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
+        diffusers_unet.load_state_dict(sd)
+        diffusers_unet.save_pretrained(*args, **kwargs)
