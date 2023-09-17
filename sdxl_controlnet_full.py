@@ -317,6 +317,7 @@ class SDXLControlNetFull(ControlNetModel):
         return controlnet
 
     def save_pretrained(self, save_path):
+        os.makedirs(save_path, exist_ok=True)
         save_path = os.path.join(save_path, "diffusion_pytorch_model.safetensors")
         sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
         safetensors.torch.save_file(sd, save_path)
