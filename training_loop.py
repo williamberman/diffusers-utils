@@ -164,7 +164,6 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
 
         scaler.update()
 
-        progress_bar.update(1)
         global_step += 1
 
         if global_step % training_config.checkpointing_steps == 0:
@@ -187,7 +186,10 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
                 "loss": accumulated_loss.item(),
                 "lr": lr_scheduler.get_last_lr()[0],
             }
-            progress_bar.set_postfix(**logs)
+
+            progress_bar.set_postfix(**logs, refresh=False)
+            progress_bar.update(1)
+
             wandb.log(logs, step=global_step)
 
         if global_step % 10 == 0:
