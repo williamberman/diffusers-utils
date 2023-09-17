@@ -2,7 +2,7 @@
 
 set -e
 
-black *.py
+black --line-length 200 *.py
 isort *.py
 
 # TODO would be nice to get mypy in better shape on the code base

@@ -24,9 +24,7 @@ def masked_image_as_pil(image: torch.Tensor) -> Image.Image:
     return image
 
 
-def make_masked_image(
-    image, return_type: Literal["controlnet_scaled_tensor"] = "controlnet_scaled_tensor"
-):
+def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor"] = "controlnet_scaled_tensor"):
     assert return_type == "controlnet_scaled_tensor"
 
     mask = make_mask(image.height, image.width)
@@ -47,21 +45,13 @@ def make_mask(height, width):
     mask_type = random.choice(masking_types)
 
     if mask_type == "full":
-        mask = np.ones(
-            (height, width), np.float32
-        )
+        mask = np.ones((height, width), np.float32)
     elif mask_type == "rectangle":
-        mask = make_random_rectangle_mask(
-            height, width
-        )
+        mask = make_random_rectangle_mask(height, width)
     elif mask_type == "irregular":
-        mask = make_random_irregular_mask(
-            height, width
-        )
+        mask = make_random_irregular_mask(height, width)
     elif mask_type == "outpainting":
-        mask = make_outpainting_mask(
-            height, width
-        )
+        mask = make_outpainting_mask(height, width)
     else:
         assert False
 
@@ -95,9 +85,7 @@ def make_random_rectangle_mask(
     return mask
 
 
-def make_random_irregular_mask(
-    height, width, max_angle=4, max_len=60, max_width=256, min_times=1, max_times=2
-):
+def make_random_irregular_mask(height, width, max_angle=4, max_len=60, max_width=256, min_times=1, max_times=2):
     mask = np.zeros((height, width), np.float32)
 
     times = np.random.randint(min_times, max_times + 1)
@@ -116,21 +104,15 @@ def make_random_irregular_mask(
 
             brush_w = 5 + np.random.randint(max_width)
 
-            end_x = np.clip(
-                (start_x + length * np.sin(angle)).astype(np.int32), 0, width
-            )
-            end_y = np.clip(
-                (start_y + length * np.cos(angle)).astype(np.int32), 0, height
-            )
+            end_x = np.clip((start_x + length * np.sin(angle)).astype(np.int32), 0, width)
+            end_y = np.clip((start_y + length * np.cos(angle)).astype(np.int32), 0, height)
 
             choice = random.randint(0, 2)
 
             if choice == 0:
                 cv2.line(mask, (start_x, start_y), (end_x, end_y), 1.0, brush_w)
             elif choice == 1:
-                cv2.circle(
-                    mask, (start_x, start_y), radius=brush_w, color=1.0, thickness=-1
-                )
+                cv2.circle(mask, (start_x, start_y), radius=brush_w, color=1.0, thickness=-1)
             elif choice == 2:
                 radius = brush_w // 2
                 mask[

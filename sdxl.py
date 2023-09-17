@@ -56,23 +56,17 @@ def init_sdxl():
 
     _init_sdxl_called = True
 
-    text_encoder_one = CLIPTextModel.from_pretrained(
-        repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16
-    )
+    text_encoder_one = CLIPTextModel.from_pretrained(repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
     text_encoder_one.to(device=device_id)
     text_encoder_one.requires_grad_(False)
     text_encoder_one.eval()
 
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(
-        repo, subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16
-    )
+    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(repo, subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
     text_encoder_two.to(device=device_id)
     text_encoder_two.requires_grad_(False)
     text_encoder_two.eval()
 
-    vae = AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16
-    )
+    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
     vae.to(device=device_id)
     vae.requires_grad_(False)
     vae.eval()
@@ -164,9 +158,7 @@ def get_sdxl_dataset():
     if training_config.training == "sdxl_adapter":
         dataset = dataset.select(adapter_image_is_not_none)
 
-    dataset = dataset.batched(
-        training_config.batch_size, partial=False, collation_fn=default_collate
-    )
+    dataset = dataset.batched(training_config.batch_size, partial=False, collation_fn=default_collate)
 
     return dataset
 
@@ -202,9 +194,7 @@ def make_sample(d):
         training_config.resolution,
     )
     resized_and_cropped_image_tensor = TF.to_tensor(resized_and_cropped_image)
-    resized_and_cropped_and_normalized_image_tensor = TF.normalize(
-        resized_and_cropped_image_tensor, [0.5], [0.5]
-    )
+    resized_and_cropped_and_normalized_image_tensor = TF.normalize(resized_and_cropped_image_tensor, [0.5], [0.5])
 
     original_width = int(metadata.get("original_width", 0.0))
     original_height = int(metadata.get("original_height", 0.0))
@@ -247,17 +237,13 @@ def make_sample(d):
         if training_config.adapter_type == "mediapipe_pose":
             from mediapipe_pose import mediapipe_pose_adapter_image
 
-            adapter_image = mediapipe_pose_adapter_image(
-                resized_and_cropped_image, return_type="vae_scaled_tensor"
-            )
+            adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
 
             sample["adapter_image"] = adapter_image
         elif training_config.adapter_type == "openpose":
             from openpose import openpose_adapter_image
 
-            adapter_image = openpose_adapter_image(
-                resized_and_cropped_image, return_type="vae_scaled_tensor"
-            )
+            adapter_image = openpose_adapter_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
 
             sample["adapter_image"] = adapter_image
         else:
@@ -265,17 +251,13 @@ def make_sample(d):
 
     if training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
-            controlnet_image = make_canny_conditioning(
-                resized_and_cropped_image, return_type="controlnet_scaled_tensor"
-            )
+            controlnet_image = make_canny_conditioning(resized_and_cropped_image, return_type="controlnet_scaled_tensor")
 
             sample["controlnet_image"] = controlnet_image
         elif training_config.controlnet_type == "inpainting":
             from masking import make_masked_image
 
-            controlnet_image = make_masked_image(
-                resized_and_cropped_image, return_type="controlnet_scaled_tensor"
-            )
+            controlnet_image = make_masked_image(resized_and_cropped_image, return_type="controlnet_scaled_tensor")
 
             sample["controlnet_image"] = controlnet_image
         else:
@@ -301,9 +283,7 @@ def sdxl_train_step(batch, global_step):
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
 
-        prompt_embeds, pooled_prompt_embeds_two = text_conditioning(
-            text_input_ids_one, text_input_ids_two
-        )
+        prompt_embeds, pooled_prompt_embeds_two = text_conditioning(text_input_ids_one, text_input_ids_two)
 
         prompt_embeds = prompt_embeds.to(dtype=unet_dtype)
         pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet_dtype)
@@ -317,9 +297,7 @@ def sdxl_train_step(batch, global_step):
             timesteps = timesteps.long().to(scheduler.timesteps.dtype)
             timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
         else:
-            timesteps = torch.randint(
-                0, scheduler.config.num_train_timesteps, (bsz,), device=device_id
-            )
+            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,), device=device_id)
 
         noise = torch.randn_like(latents)
         noisy_latents = scheduler.add_noise(latents, noise, timesteps)
@@ -341,10 +319,7 @@ def sdxl_train_step(batch, global_step):
 
             down_block_additional_residuals = adapter(adapter_image)
 
-            down_block_additional_residuals = [
-                x * training_config.adapter_conditioning_scale
-                for x in down_block_additional_residuals
-            ]
+            down_block_additional_residuals = [x * training_config.adapter_conditioning_scale for x in down_block_additional_residuals]
 
         if training_config.training == "sdxl_controlnet":
             controlnet_image = batch["controlnet_image"].to(device_id)
@@ -395,9 +370,7 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
         output_hidden_states=True,
     ).hidden_states[-2]
 
-    prompt_embeds_1 = prompt_embeds_1.view(
-        prompt_embeds_1.shape[0], prompt_embeds_1.shape[1], -1
-    )
+    prompt_embeds_1 = prompt_embeds_1.view(prompt_embeds_1.shape[0], prompt_embeds_1.shape[1], -1)
 
     prompt_embeds_2 = text_encoder_two(
         text_input_ids_two,
@@ -408,9 +381,7 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
 
     prompt_embeds_2 = prompt_embeds_2.hidden_states[-2]
 
-    prompt_embeds_2 = prompt_embeds_2.view(
-        prompt_embeds_2.shape[0], prompt_embeds_2.shape[1], -1
-    )
+    prompt_embeds_2 = prompt_embeds_2.view(prompt_embeds_2.shape[0], prompt_embeds_2.shape[1], -1)
 
     prompt_embeds = torch.cat((prompt_embeds_1, prompt_embeds_2), dim=-1)
 
@@ -418,9 +389,7 @@ def text_conditioning(text_input_ids_one, text_input_ids_two):
 
 
 @torch.no_grad()
-def log_predicted_images(
-    noisy_latents, sigmas, noise, model_pred, timesteps, global_step
-):
+def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, global_step):
     os.makedirs("./output/test_out", exist_ok=True)
 
     with torch.no_grad():
@@ -514,39 +483,29 @@ def sdxl_log_validation(step):
         for validation_image in training_config.validation_images:
             validation_image = Image.open(validation_image)
             validation_image = validation_image.convert("RGB")
-            validation_image = validation_image.resize(
-                (training_config.resolution, training_config.resolution)
-            )
+            validation_image = validation_image.resize((training_config.resolution, training_config.resolution))
 
             if training_config.training == "sdxl_adapter":
                 if training_config.adapter_type == "mediapipe_pose":
                     from mediapipe_pose import mediapipe_pose_adapter_image
 
-                    validation_image = mediapipe_pose_adapter_image(
-                        validation_image, return_type="pil"
-                    )
+                    validation_image = mediapipe_pose_adapter_image(validation_image, return_type="pil")
                 elif training_config.adapter_type == "openpose":
                     from openpose import openpose_adapter_image
 
-                    validation_image = openpose_adapter_image(
-                        validation_image, return_type="pil"
-                    )
+                    validation_image = openpose_adapter_image(validation_image, return_type="pil")
                 else:
                     assert False
             elif training_config.training == "sdxl_controlnet":
                 if training_config.controlnet_type == "canny":
-                    validation_image = make_canny_conditioning(
-                        validation_image, return_type="pil"
-                    )
+                    validation_image = make_canny_conditioning(validation_image, return_type="pil")
                 elif training_config.controlnet_type == "inpainting":
                     # TODO - because we can't get a PIL back here to pass to both the
                     # wandb lob and the pipeline, this is messy+redundant. Is there
                     # a better way to do this?
                     from masking import make_masked_image
 
-                    validation_image = make_masked_image(
-                        validation_image, return_type="controlnet_scaled_tensor"
-                    )
+                    validation_image = make_masked_image(validation_image, return_type="controlnet_scaled_tensor")
 
                     validation_image = validation_image[None, :, :, :]
 
@@ -558,10 +517,7 @@ def sdxl_log_validation(step):
 
             formatted_validation_images.append(validation_image)
 
-        if (
-            training_config.controlnet_type == "inpainting"
-            or not _validation_images_logged
-        ):
+        if training_config.controlnet_type == "inpainting" or not _validation_images_logged:
             wandb_validation_images = []
 
             for validation_image in formatted_validation_images:
@@ -592,12 +548,8 @@ def sdxl_log_validation(step):
             args["image"] = formatted_validation_images[i]
 
         if training_config.training == "sdxl_adapter":
-            args[
-                "adapter_conditioning_scale"
-            ] = training_config.adapter_conditioning_scale
-            args[
-                "adapter_conditioning_factor"
-            ] = training_config.adapter_conditioning_factor
+            args["adapter_conditioning_scale"] = training_config.adapter_conditioning_scale
+            args["adapter_conditioning_factor"] = training_config.adapter_conditioning_factor
 
         with torch.autocast("cuda"):
             image = pipeline(**args).images[0]
@@ -643,18 +595,14 @@ def maybe_ddp_module(m):
 
 def make_canny_conditioning(
     image,
-    return_type: Literal[
-        "controlnet_scaled_tensor", "pil"
-    ] = "controlnet_scaled_tensor",
+    return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor",
 ):
     import cv2
 
     controlnet_image = np.array(image)
     controlnet_image = cv2.Canny(controlnet_image, 100, 200)
     controlnet_image = controlnet_image[:, :, None]
-    controlnet_image = np.concatenate(
-        [controlnet_image, controlnet_image, controlnet_image], axis=2
-    )
+    controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
 
     if return_type == "controlnet_scaled_tensor":
         controlnet_image = TF.to_tensor(controlnet_image)

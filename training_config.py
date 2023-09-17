@@ -10,9 +10,7 @@ DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
 DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE = "DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE"
 
 if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
-    raise ValueError(
-        f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run."
-    )
+    raise ValueError(f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run.")
 
 
 @dataclass
@@ -65,9 +63,7 @@ class Config:
 #
 # All initial default values will be immediately over written when `load_training_config` is
 # called at module initialization
-training_config: Config = Config(
-    output_dir="NOT USED", training="sdxl_controlnet", train_shards="NOT USED"
-)
+training_config: Config = Config(output_dir="NOT USED", training="sdxl_controlnet", train_shards="NOT USED")
 
 
 def load_training_config():
@@ -82,17 +78,11 @@ def load_training_config():
         override_config_key = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE]
 
         if override_config_key not in override_configs:
-            raise ValueError(
-                f"{override_config_key} is not one of the available overrides {override_configs.keys()}"
-            )
+            raise ValueError(f"{override_config_key} is not one of the available overrides {override_configs.keys()}")
 
         yaml_config.update(override_configs[override_config_key])
 
-    if (
-        "mixed_precision" not in yaml_config
-        or yaml_config["mixed_precision"] is None
-        or yaml_config["mixed_precision"] == "no"
-    ):
+    if "mixed_precision" not in yaml_config or yaml_config["mixed_precision"] is None or yaml_config["mixed_precision"] == "no":
         yaml_config["mixed_precision"] = None
     elif yaml_config["mixed_precision"] == "fp16":
         yaml_config["mixed_precision"] = torch.float16
@@ -105,15 +95,11 @@ def load_training_config():
 
     if training_config_.training == "sdxl_adapter":
         if training_config_.adapter_type is None:
-            raise ValueError(
-                'must set `adapter_type` if `training` set to "sdxl_adapter"'
-            )
+            raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
 
     if training_config_.training == "sdxl_controlnet":
         if training_config_.controlnet_type is None:
-            raise ValueError(
-                'must set `controlnet_type` if `training` set to "sdxl_controlnet"'
-            )
+            raise ValueError('must set `controlnet_type` if `training` set to "sdxl_controlnet"')
 
     # dirty set/get attr because dataclasses do not allow setting/getting via strings
     for field in dataclasses.fields(Config):

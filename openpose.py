@@ -22,9 +22,7 @@ def init_openpose():
     open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
 
 
-def openpose_adapter_image(
-    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
-):
+def openpose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
     init_openpose()
 
     pose = open_pose(

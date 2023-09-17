@@ -29,15 +29,11 @@ def init_mediapipe_pose():
     _init_mediapipe_pose_called = True
 
     base_options = python.BaseOptions(model_asset_path="pose_landmarker.task")
-    options = vision.PoseLandmarkerOptions(
-        base_options=base_options, output_segmentation_masks=False
-    )
+    options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
     detector = vision.PoseLandmarker.create_from_options(options)
 
 
-def mediapipe_pose_adapter_image(
-    image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"
-):
+def mediapipe_pose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
     init_mediapipe_pose()
 
     numpy_image = np.array(image)
@@ -74,14 +70,7 @@ def draw_landmarks_on_image(pose, pose_landmarks):
         pose_landmarks = pose_landmarks[idx]
 
         pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        pose_landmarks_proto.landmark.extend(
-            [
-                landmark_pb2.NormalizedLandmark(
-                    x=landmark.x, y=landmark.y, z=landmark.z
-                )
-                for landmark in pose_landmarks
-            ]
-        )
+        pose_landmarks_proto.landmark.extend([landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks])
         solutions.drawing_utils.draw_landmarks(
             pose,
             pose_landmarks_proto,
