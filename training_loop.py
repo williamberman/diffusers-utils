@@ -6,7 +6,6 @@ from logging import getLogger
 import torch
 import torch.distributed as dist
 from bitsandbytes.optim import AdamW8bit
-from safetensors import safe_open
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
@@ -107,9 +106,7 @@ def main():
             assert False
 
 
-def training_loop(
-    training_parameters, parameters_to_clip, dataset, log_validation, train_step
-):
+def training_loop(training_parameters, parameters_to_clip, dataset, log_validation, train_step):
     optimizer = AdamW8bit(training_parameters(), lr=training_config.learning_rate)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
@@ -212,9 +209,7 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
             num_to_remove = len(checkpoints) - checkpoints_total_limit + 1
             removing_checkpoints = checkpoints[0:num_to_remove]
 
-            logger.info(
-                f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-            )
+            logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
             logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
             for removing_checkpoint in removing_checkpoints:
@@ -246,20 +241,8 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
 
 def load_checkpoint(resume_from, optimizer):
-    optimizer_state_dict = torch.load(
-        os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id)
-    )
+    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id))
     optimizer.load_state_dict(optimizer_state_dict)
-
-
-def load_safetensors_state_dict(filename):
-    state_dict = {}
-
-    with safe_open(filename, framework="pt") as f:
-        for key in f.keys():
-            state_dict[key] = f.get_tensor(key)
-
-    return state_dict
 
 
 if __name__ == "__main__":
