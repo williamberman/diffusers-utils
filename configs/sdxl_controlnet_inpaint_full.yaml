@@ -38,3 +38,9 @@ checkpoints_total_limit: 5
 
 project_name: "sdxl_controlnet_inpaint_full"
 training_run_name: "sdxl_controlnet_inpaint_full"
+
+overrides:
+  9_18_resume_from_40000:
+    start_step: 40000
+    resume_from: /fsx/william/diffusers-utils/output/sdxl_controlnet_inpaint_full.bak/checkpoint-40000
+    training_run_name: 9_18_resume_from_40000
