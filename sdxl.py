@@ -514,7 +514,7 @@ def sdxl_log_validation(step):
                     validation_image = make_canny_conditioning(validation_image, return_type="pil")
                 elif training_config.controlnet_type == "inpainting":
                     # TODO - because we can't get a PIL back here to pass to both the
-                    # wandb lob and the pipeline, this is messy+redundant. Is there
+                    # wandb log and the pipeline, this is messy+redundant. Is there
                     # a better way to do this?
                     from masking import make_masked_image
 
