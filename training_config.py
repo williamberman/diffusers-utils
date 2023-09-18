@@ -29,6 +29,7 @@ class Config:
     # `training_config.training == "sdxl_controlnet"` specific config
     controlnet_type: Optional[Literal["canny", "inpainting"]] = None
     controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"] = "default"
+    controlnet_train_base_unet: bool = False
 
     # core training config
     learning_rate: float = 0.00001

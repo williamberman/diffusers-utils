@@ -8,7 +8,7 @@ from torch import nn
 
 from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
 from sdxl_controlnet import ControlNetOutput
-from utils import load_safetensors_state_dict, zero_module
+from utils import load_safetensors_state_dict, maybe_ddp_module, zero_module
 
 
 class SDXLControlNetFull(ControlNetModel):
@@ -324,6 +324,8 @@ class SDXLControlNetFull(ControlNetModel):
 
     @classmethod
     def from_unet(cls, unet):
+        unet = maybe_ddp_module(unet)
+
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())

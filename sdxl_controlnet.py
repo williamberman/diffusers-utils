@@ -8,7 +8,7 @@ from diffusers.utils.outputs import BaseOutput
 from torch import nn
 
 from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
-from utils import zero_module
+from utils import maybe_ddp_module, zero_module
 
 
 @dataclass
@@ -252,6 +252,8 @@ class SDXLControlNet(ControlNetModel):
 
     @classmethod
     def from_unet(cls, unet):
+        unet = maybe_ddp_module(unet)
+
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())

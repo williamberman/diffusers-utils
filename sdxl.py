@@ -26,6 +26,7 @@ from sdxl_controlnet_pre_encoded_controlnet_cond import \
     SDXLControlNetPreEncodedControlnetCond
 from sdxl_unet import SDXLUNet
 from training_config import training_config
+from utils import maybe_ddp_dtype, maybe_ddp_module
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
@@ -99,7 +100,15 @@ def init_sdxl():
     # TODO - add back
     # unet.enable_gradient_checkpointing()
 
-    if training_config.training == "sdxl_unet":
+    if training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet:
+        unet.requires_grad_(False)
+        unet.eval()
+
+        unet.up_blocks.requires_grad_(True)
+        unet.up_blocks.train()
+
+        unet = DDP(unet, device_ids=[device_id], find_unused_parameters=True)
+    elif training_config.training == "sdxl_unet":
         unet.requires_grad_(True)
         unet.train()
         unet = DDP(unet, device_ids=[device_id])
@@ -501,11 +510,17 @@ def sdxl_log_validation(step):
         controlnet_ = maybe_ddp_module(controlnet)
         controlnet_.eval()
 
+        if training_config.controlnet_train_base_unet:
+            unet_ = maybe_ddp_module(unet)
+            unet_.eval()
+        else:
+            unet_ = unet
+
         pipeline = StableDiffusionXLControlNetPipeline(
             vae=vae,
             text_encoder=text_encoder_one,
             text_encoder_2=text_encoder_two,
-            unet=unet,
+            unet=unet_,
             controlnet=controlnet_,
             scheduler=scheduler,
             tokenizer=tokenizer_one,
@@ -561,6 +576,9 @@ def sdxl_log_validation(step):
         adapter_.train()
     elif training_config.training == "sdxl_controlnet":
         controlnet_.train()
+
+        if training_config.controlnet_train_base_unet:
+            unet_.train()
     else:
         assert False
 
@@ -635,18 +653,6 @@ def get_sigmas(timesteps, n_dim=4):
         sigma = sigma.unsqueeze(-1)
 
     return sigma
-
-
-def maybe_ddp_dtype(m):
-    if isinstance(m, DDP):
-        m = m.module
-    return m.dtype
-
-
-def maybe_ddp_module(m):
-    if isinstance(m, DDP):
-        m = m.module
-    return m
 
 
 def make_canny_conditioning(

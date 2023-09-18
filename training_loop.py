@@ -1,8 +1,10 @@
+import itertools
 import logging
 import os
 import shutil
 from logging import getLogger
 
+import safetensors.torch
 import torch
 import torch.distributed as dist
 from bitsandbytes.optim import AdamW8bit
@@ -14,6 +16,7 @@ from tqdm.auto import tqdm
 
 import wandb
 from training_config import load_training_config, training_config
+from utils import maybe_ddp_module
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -51,8 +54,8 @@ def main():
         from sdxl import (get_sdxl_dataset, sdxl_log_validation,
                           sdxl_train_step, unet)
 
-        training_parameters = unet.parameters
-        parameters_to_clip = unet.parameters
+        training_parameters = maybe_ddp_module(unet).parameters
+        parameters_to_clip = maybe_ddp_module(unet).parameters
         dataset = get_sdxl_dataset()
         log_validation = sdxl_log_validation
         train_step = sdxl_train_step
@@ -64,8 +67,8 @@ def main():
         from sdxl import (adapter, get_sdxl_dataset, sdxl_log_validation,
                           sdxl_train_step)
 
-        training_parameters = adapter.parameters
-        parameters_to_clip = adapter.parameters
+        training_parameters = maybe_ddp_module(adapter).parameters
+        parameters_to_clip = maybe_ddp_module(adapter).parameters
         dataset = get_sdxl_dataset()
         log_validation = sdxl_log_validation
         train_step = sdxl_train_step
@@ -75,10 +78,15 @@ def main():
         init_sdxl()
 
         from sdxl import (controlnet, get_sdxl_dataset, sdxl_log_validation,
-                          sdxl_train_step)
+                          sdxl_train_step, unet)
 
-        training_parameters = controlnet.parameters
-        parameters_to_clip = controlnet.parameters
+        if training_config.controlnet_train_base_unet:
+            training_parameters = lambda: itertools.chain(maybe_ddp_module(controlnet).parameters(), maybe_ddp_module(unet).up_blocks.parameters())
+            parameters_to_clip = lambda: itertools.chain(maybe_ddp_module(controlnet).parameters(), maybe_ddp_module(unet).up_blocks.parameters())
+        else:
+            training_parameters = maybe_ddp_module(controlnet).parameters
+            parameters_to_clip = maybe_ddp_module(controlnet).parameters
+
         dataset = get_sdxl_dataset()
         log_validation = sdxl_log_validation
         train_step = sdxl_train_step
@@ -231,11 +239,19 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
         adapter.module.save_pretrained(save_path)
     elif training_config.training == "sdxl_controlnet":
-        from sdxl import controlnet
+        from sdxl import controlnet, unet
 
-        save_path = os.path.join(save_path, "controlnet")
+        controlnet_save_path = os.path.join(save_path, "controlnet")
 
-        controlnet.module.save_pretrained(save_path)
+        controlnet.module.save_pretrained(controlnet_save_path)
+
+        if training_config.controlnet_train_base_unet:
+            # TODO - implement loading
+            unet_state_dict = {k: v.to("cpu") for k, v in unet.up_blocks.state_dict().items()}
+
+            unet_save_path = os.path.join(save_path, "unet.safetensors")
+
+            safetensors.torch.save_file(unet_state_dict, unet_save_path)
     else:
         assert False
 

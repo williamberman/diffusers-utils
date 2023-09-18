@@ -1,5 +1,6 @@
 from safetensors import safe_open
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def load_safetensors_state_dict(filename):
@@ -16,3 +17,15 @@ def zero_module(module):
     for p in module.parameters():
         nn.init.zeros_(p)
     return module
+
+
+def maybe_ddp_dtype(m):
+    if isinstance(m, DDP):
+        m = m.module
+    return m.dtype
+
+
+def maybe_ddp_module(m):
+    if isinstance(m, DDP):
+        m = m.module
+    return m
