@@ -332,6 +332,7 @@ def sdxl_train_step(batch, global_step):
 
                 controlnet_image = batch["controlnet_image"].to(device_id, dtype=vae.dtype)
                 controlnet_image = vae.encode(controlnet_image).latent_dist.sample().to(dtype=controlnet_dtype)
+                controlnet_image = controlnet_image * vae.config.scaling_factor
 
                 _, _, controlnet_image_height, controlnet_image_width = controlnet_image.shape
                 controlnet_image_mask = batch["controlnet_image_mask"].to(device=device_id)
@@ -600,6 +601,7 @@ def get_validation_images(validation_image_path):
                 validation_image = validation_image.to(device_id, dtype=vae.dtype)
 
                 validation_image = vae.encode(validation_image).latent_dist.sample()
+                validation_image = validation_image * vae.config.scaling_factor
 
                 _, _, controlnet_image_height, controlnet_image_width = validation_image.shape
                 controlnet_image_mask = TF.resize(torch.from_numpy(controlnet_image_mask)[None, None, :, :], (controlnet_image_height, controlnet_image_width)).to(
