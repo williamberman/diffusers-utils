@@ -1,10 +1,13 @@
+import os
+
+import safetensors.torch
 import torch
 from diffusers import ControlNetModel
 from torch import nn
 
 from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
 from sdxl_controlnet import ControlNetOutput
-from utils import zero_module
+from utils import load_safetensors_state_dict, maybe_ddp_module, zero_module
 
 
 class SDXLControlNetPreEncodedControlnetCond(ControlNetModel):
@@ -195,20 +198,23 @@ class SDXLControlNetPreEncodedControlnetCond(ControlNetModel):
         return next(self.parameters()).dtype
 
     @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained(*args, **kwargs)
+    def from_pretrained(cls, load_path):
+        load_path = os.path.join(load_path, "diffusion_pytorch_model.safetensors")
+        sd = load_safetensors_state_dict(load_path)
         controlnet = cls()
-        controlnet.load_state_dict(diffusers_controlnet.state_dict())
+        controlnet.load_state_dict(sd)
         return controlnet
 
-    def save_pretrained(self, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained("diffusers/controlnet-canny-sdxl-1.0")
+    def save_pretrained(self, save_path):
+        os.makedirs(save_path, exist_ok=True)
+        save_path = os.path.join(save_path, "diffusion_pytorch_model.safetensors")
         sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
-        diffusers_controlnet.load_state_dict(sd)
-        diffusers_controlnet.save_pretrained(*args, **kwargs)
+        safetensors.torch.save_file(sd, save_path)
 
     @classmethod
     def from_unet(cls, unet):
+        unet = maybe_ddp_module(unet)
+
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())
