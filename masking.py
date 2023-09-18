@@ -24,21 +24,32 @@ def masked_image_as_pil(image: torch.Tensor) -> Image.Image:
     return image
 
 
-def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor"] = "controlnet_scaled_tensor"):
-    assert return_type == "controlnet_scaled_tensor"
+def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor", "vae_scaled_tensor"] = "controlnet_scaled_tensor", mask=None):
+    if mask is None:
+        mask = make_mask(image.height, image.width)
 
-    mask = make_mask(image.height, image.width)
     mask = torch.from_numpy(mask)
     mask = mask[None, :, :]
 
     image = TF.to_tensor(image)
 
-    # where mask is set to 1, set to -1 "special" masked image pixel.
-    # -1 is outside of the 0-1 range that the controlnet normalized
-    # input is in.
-    image = image * (mask < 0.5) + -1.0 * (mask > 0.5)
+    if return_type == "controlnet_scaled_tensor":
+        # where mask is set to 1, set to -1 "special" masked image pixel.
+        # -1 is outside of the 0-1 range that the controlnet normalized
+        # input is in.
+        image = image * (mask < 0.5) + -1.0 * (mask > 0.5)
+    elif return_type == "vae_scaled_tensor":
+        # where mask is 1, zero out the pixels. Note that if you use the
+        # image output of the `vae_scaled_tensor` such as in pre_encoded_controlnet_cond,
+        # the network must also be passed the mask so it knows the zeroed out pixels are
+        # from the mask and are not just zero in the original image
+        image = image * (mask < 0.5)
 
-    return image
+        image = TF.normalize(image, [0.5], [0.5])
+    else:
+        assert False
+
+    return image, mask
 
 
 def make_mask(height, width):

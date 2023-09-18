@@ -28,7 +28,7 @@ class Config:
     # TODO: bad naming
     # `training_config.training == "sdxl_controlnet"` specific config
     controlnet_type: Optional[Literal["canny", "inpainting"]] = None
-    controlnet_variant: Literal["default", "full"] = "default"
+    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"] = "default"
 
     # core training config
     learning_rate: float = 0.00001

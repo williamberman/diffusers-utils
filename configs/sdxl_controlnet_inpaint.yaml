@@ -90,3 +90,4 @@ overrides:
     start_step: 80000
     output_dir: /fsx/william/diffusers-utils/output/sdxl_controlnet_inpaint_9_16_resume_from_80000_batch_size_168
     training_run_name: 9_16_resume_from_80000_batch_size_168
+    checkpoints_total_limit: 5

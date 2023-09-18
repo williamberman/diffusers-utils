@@ -1,0 +1,40 @@
+output_dir: "./output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond"
+training: "sdxl_controlnet"
+train_shards: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-min512-data/{00000..01210}.tar -"
+controlnet_type: "inpainting"
+controlnet_variant: "pre_encoded_controlnet_cond"
+
+mixed_precision: fp16
+batch_size: 6
+learning_rate: 0.00001
+max_train_steps: 200000
+
+proportion_empty_prompts: 0.5
+
+validation_steps: 1000
+checkpointing_steps: 1000
+validation_images:
+- ./validation_data/person_jumping.png
+- ./validation_data/bright_room_with_chair.png
+- ./validation_data/couple_sitting_on_bench_infront_of_lake.png
+- ./validation_data/house_in_snowy_mountains.png
+- ./validation_data/hq_woman.png
+- ./validation_data/man_skating.png
+- ./validation_data/painting_of_rice_paddies.png
+- ./validation_data/tornado_at_sea.png
+- ./validation_data/two_birds_on_branch.png
+validation_prompts:
+- "superman"
+- "bright room with chair"
+- "couple sitting on bench infront of lake"
+- "house in snowy mountains"
+- "a beautiful woman"
+- "a man skating in brooklyn"
+- "a painting of people working the rice paddies"
+- "a tornado in ohio"
+- "two birds on a branch"
+num_validation_images: 1
+checkpoints_total_limit: 5
+
+project_name: "sdxl_controlnet_inpaint_pre_encoded_controlnet_cond"
+training_run_name: "sdxl_controlnet_inpaint_pre_encoded_controlnet_cond"
