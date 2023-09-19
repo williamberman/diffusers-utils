@@ -146,10 +146,17 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
     while True:
         accumulated_loss = None
 
+        nan_loss = False
+
         for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
             loss = train_step(batch=batch, global_step=global_step)
+
+            if torch.isnan(loss):
+                logger.error("nan loss, ending training")
+                nan_loss = True
+                break
 
             loss = loss / training_config.gradient_accumulation_steps
 
@@ -159,6 +166,9 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
                 accumulated_loss = loss.detach()
             else:
                 accumulated_loss += loss.detach()
+
+        if nan_loss:
+            break
 
         scaler.unscale_(optimizer)
 
