@@ -59,6 +59,9 @@ class Config:
     project_name: Optional[str] = None
     training_run_name: Optional[str] = None
 
+    # testing
+    dummy_dataset: bool = False
+
 
 # this instance will never be reset, only the values inside it will be overwritten
 # this allows other modules to import the value once, and then call `load_training_config`

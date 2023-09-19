@@ -176,6 +176,9 @@ def init_sdxl():
 
 
 def get_sdxl_dataset():
+    if training_config.dummy_dataset:
+        return get_sdxl_dummy_dataset()
+
     dataset = (
         wds.WebDataset(
             training_config.train_shards,
@@ -200,6 +203,35 @@ def get_sdxl_dataset():
 
     return dataset
 
+def get_sdxl_dummy_dataset():
+    image = Image.open('./validation_data/two_birds_on_branch.png').convert('RGB')
+
+    metadata = {
+        "original_height": image.height,
+        "original_width": image.width
+    }
+
+    text = "two birds on a branch"
+
+    sample = {
+        "image": image,
+        "metadata": metadata,
+        "text": text,
+    }
+
+    from torch.utils.data.dataset import IterableDataset
+
+    class Dataset(IterableDataset):
+        def __iter__(self):
+            while True:
+                batch = []
+
+                for _ in range(training_config.batch_size):
+                    batch.append(make_sample(sample))
+
+                yield default_collate(batch)
+
+    return Dataset()
 
 @torch.no_grad()
 def make_sample(d):
