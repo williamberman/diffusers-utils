@@ -39,3 +39,6 @@ checkpoints_total_limit: 5
 
 project_name: "sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet"
 training_run_name: "sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet"
+
+resume_from: "/fsx/william/diffusers-utils/output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet/checkpoint-1000"
+start_step: 1000

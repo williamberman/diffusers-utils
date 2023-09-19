@@ -26,7 +26,7 @@ from sdxl_controlnet_pre_encoded_controlnet_cond import \
     SDXLControlNetPreEncodedControlnetCond
 from sdxl_unet import SDXLUNet
 from training_config import training_config
-from utils import maybe_ddp_dtype, maybe_ddp_module
+from utils import maybe_ddp_dtype, maybe_ddp_module, load_safetensors_state_dict
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
@@ -88,6 +88,21 @@ def init_sdxl():
             unet_repo,
             subfolder="unet",
         )
+    elif training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet:
+        unet = SDXLUNet.from_pretrained(
+            repo,
+            subfolder="unet",
+        )
+
+        if training_config.resume_from is not None:
+            unet_state_dict = load_safetensors_state_dict(os.path.join(training_config.resume_from, "unet.safetensors"))
+
+            unet_state_dict = {k: v.to(torch.float32) for k, v in unet_state_dict.items()}
+
+            load_sd_results = unet.up_blocks.load_state_dict(unet_state_dict, strict=False)
+
+            if len(load_sd_results.unexpected_keys) > 0:
+                raise ValueError(f"error loading state dict: {load_sd_results.unexpected_keys}")
     else:
         unet = SDXLUNet.from_pretrained(
             repo,
