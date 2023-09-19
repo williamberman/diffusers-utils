@@ -247,7 +247,7 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
         if training_config.controlnet_train_base_unet:
             # TODO - implement loading
-            unet_state_dict = {k: v.to("cpu") for k, v in unet.up_blocks.state_dict().items()}
+            unet_state_dict = {k: v.to("cpu") for k, v in maybe_ddp_module(unet).up_blocks.state_dict().items()}
 
             unet_save_path = os.path.join(save_path, "unet.safetensors")
 
