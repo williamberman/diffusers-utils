@@ -281,11 +281,11 @@ class SDXLUNet(UNet2DConditionModel):
 
     @classmethod
     def load_fp32(cls, device=None):
-        return cls.load('./weights/sdxl_unet.safetensors', device=device, dtype=torch.float32)
+        return cls.load('./weights/sdxl_unet.safetensors', device=device)
 
     @classmethod
     def load_fp16(cls, device=None):
-        return cls.load('./weights/sdxl_unet.fp16.safetensors', device=device, dtype=torch.float16)
+        return cls.load('./weights/sdxl_unet.fp16.safetensors', device=device)
 
     def save_pretrained(self, *args, **kwargs):
         diffusers_unet = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
