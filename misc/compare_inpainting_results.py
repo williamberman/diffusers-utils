@@ -57,6 +57,7 @@ def main():
     masked_images = []
     masks = []
     prompts = []
+    vae_encoded_masked_images = []
 
     for image, mask_image, prompt in validation_data:
         row = [prompt]
@@ -73,10 +74,16 @@ def main():
         masked_image = masked_image[None, :, :, :]
         masked_image = masked_image.to(device='cuda', dtype=torch.float16)
 
+        vae_encoded_masked_image, _ = make_masked_image(image, return_type="vae_scaled_tensor", mask=mask)
+        vae_encoded_masked_image = vae_encoded_masked_image[None, :, :, :]
+        vae_encoded_masked_image = vae_encoded_masked_image.to(device='cuda', dtype=torch.float16)
+
         mask = torch.from_numpy(mask)[None, None, :, :].to(device='cuda', dtype=torch.float16)
         masks += [mask] * num_images_per_validation
 
         masked_images += [masked_image] * num_images_per_validation
+
+        vae_encoded_masked_images += [vae_encoded_masked_image] * num_images_per_validation
 
         prompts += [prompt] * num_images_per_validation
 
@@ -86,7 +93,8 @@ def main():
 
     masked_images = torch.concat(masked_images)
 
-    vae_encoded_masked_images = vae.encode(masked_images).latent_dist.sample(generator=torch.Generator().manual_seed(0))
+    vae_encoded_masked_images = torch.concat(vae_encoded_masked_images)
+    vae_encoded_masked_images = vae.encode(vae_encoded_masked_images).latent_dist.sample(generator=torch.Generator().manual_seed(0))
     vae_encoded_masked_images = vae_encoded_masked_images * vae.config.scaling_factor
 
     masks = torch.concat(masks)
@@ -304,7 +312,6 @@ def main():
 
         mask = Image.open(mask_image).convert('L').resize((1024, 1024))
         pil_mask_images += [mask] * num_images_per_validation
-
 
     def base_sdxl_inpainting():
         pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
