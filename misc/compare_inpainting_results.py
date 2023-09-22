@@ -43,9 +43,7 @@ def main():
         ["./validation_data/dog_sitting_on_bench.png", "./validation_data/dog_sitting_on_bench_mask.png", "a green lion sitting on a bench" + suffix],
         ["./validation_data/two_birds_on_branch.png", "./validation_data/two_birds_on_branch_mask.png", "two birds on a branch" + suffix],
         ["./validation_data/couple_sitting_on_bench_infront_of_lake.png", "./validation_data/couple_sitting_on_bench_infront_of_lake_mask.png", "couple sitting on bench infront of lake" + suffix],
-
-        # TODO
-        # ["./validation_data/house_in_snowy_mountains.png", "./validation_data/house_in_snowy_mountains_mask.png", "a house in the snowy mountains" + suffix],
+        ["./validation_data/house_in_snowy_mountains.png", "./validation_data/house_in_snowy_mountains_mask.png", "a house in the snowy mountains" + suffix],
     ]
 
 
@@ -130,8 +128,10 @@ def main():
 
             log_images("regular controlnet architecture", images[0:4], idx)
             idx += 1
-            log_images("regular controlnet architecture", images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images("regular controlnet architecture", images[4:], idx)
+                idx += 1
 
 
     def sdxl_controlnet_inpaint_full():
@@ -165,8 +165,10 @@ def main():
 
             log_images('"full" controlnet architecture', images[0:4], idx)
             idx += 1
-            log_images('"full" controlnet architecture', images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images('"full" controlnet architecture', images[4:], idx)
+                idx += 1
 
     def sdxl_controlnet_inpaint_pre_encoded_controlnet_cond():
         checkpoint = get_latest_checkpoint("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond")
@@ -202,8 +204,10 @@ def main():
 
             log_images('regular controlnet architecture with vae encoding control', images[0:4], idx)
             idx += 1
-            log_images('regular controlnet architecture with vae encoding control', images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images('regular controlnet architecture with vae encoding control', images[4:], idx)
+                idx += 1
 
     # from now on we can mutate the unet weights
 
@@ -245,8 +249,10 @@ def main():
 
             log_images('regular controlnet architecture + train unet up blocks', images[0:4], idx)
             idx += 1
-            log_images('regular controlnet architecture + train unet up blocks', images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images('regular controlnet architecture + train unet up blocks', images[4:], idx)
+                idx += 1
 
     def sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet():
         checkpoint = get_latest_checkpoint("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet")
@@ -284,8 +290,10 @@ def main():
 
             log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images[0:4], idx)
             idx += 1
-            log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images[4:], idx)
+                idx += 1
 
     pil_images = []
     pil_mask_images = []
@@ -323,8 +331,10 @@ def main():
 
             log_images("base sdxl inpainting", images[0:4], idx)
             idx += 1
-            log_images("base sdxl inpainting", images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images("base sdxl inpainting", images[4:], idx)
+                idx += 1
 
     def diffusers_finetuned_sdxl_inpainting_01():
         pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
@@ -351,8 +361,10 @@ def main():
 
             log_images("diffusers finetuned sdxl inpaint 0.1", images[0:4], idx)
             idx += 1
-            log_images("diffusers finetuned sdxl inpaint 0.1", images[4:], idx)
-            idx += 1
+
+            if len(images) > 4:
+                log_images("diffusers finetuned sdxl inpaint 0.1", images[4:], idx)
+                idx += 1
 
 
     def log_images(model_name, images, idx):
@@ -364,7 +376,7 @@ def main():
     sdxl_controlnet_inpaint()
     sdxl_controlnet_inpaint_full()
     sdxl_controlnet_inpaint_pre_encoded_controlnet_cond()
-    sdxl_controlnet_inpaint_train_base_unet()
+    # sdxl_controlnet_inpaint_train_base_unet() Latest run degenerated
     sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet()
     base_sdxl_inpainting()
     diffusers_finetuned_sdxl_inpainting_01()
