@@ -11,6 +11,12 @@ from typing import List
 import wandb
 from utils import load_safetensors_state_dict
 import torchvision.transforms.functional as TF
+import os
+
+
+torch.set_grad_enabled(False)
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 def main():
     wandb.init(
@@ -26,9 +32,22 @@ def main():
 
     num_images_per_validation = 4
 
+    chunk_size = num_images_per_validation * 2
+
+    suffix = ", high quality, 4k"
+
     validation_data = [
-        ["./validation_data/person_jumping.png", "./validation_data/person_jumping_mask.png", "superman"]
+        ["./validation_data/person_jumping.png", "./validation_data/person_jumping_mask.png", "superman" + suffix],
+        ["./validation_data/dog_sitting_on_bench.png", "./validation_data/dog_sitting_on_bench_mask.png", "a cat sitting on a bench" + suffix],
+        ["./validation_data/dog_sitting_on_bench.png", "./validation_data/dog_sitting_on_bench_mask.png", "a lion sitting on a bench" + suffix],
+        ["./validation_data/dog_sitting_on_bench.png", "./validation_data/dog_sitting_on_bench_mask.png", "a green lion sitting on a bench" + suffix],
+        ["./validation_data/two_birds_on_branch.png", "./validation_data/two_birds_on_branch_mask.png", "two birds on a branch" + suffix],
+        ["./validation_data/couple_sitting_on_bench_infront_of_lake.png", "./validation_data/couple_sitting_on_bench_infront_of_lake_mask.png", "couple sitting on bench infront of lake" + suffix],
+
+        # TODO
+        # ["./validation_data/house_in_snowy_mountains.png", "./validation_data/house_in_snowy_mountains_mask.png", "a house in the snowy mountains" + suffix],
     ]
+
 
     tables = [
         wandb.Table(columns=["model"] + [f"image {i}" for i in range(num_images_per_validation)])
@@ -68,20 +87,17 @@ def main():
     wandb.log({"validation data": validation_data_table})
 
     masked_images = torch.concat(masked_images)
-    masked_images = torch.concat([masked_images, masked_images]) # cfg
 
     vae_encoded_masked_images = vae.encode(masked_images).latent_dist.sample(generator=torch.Generator().manual_seed(0))
     vae_encoded_masked_images = vae_encoded_masked_images * vae.config.scaling_factor
 
     masks = torch.concat(masks)
     masks = TF.resize(masks, (128, 128))
-    masks = torch.concat([masks, masks]) # cfg
 
     vae_encoded_masked_images = torch.concat([vae_encoded_masked_images, masks], dim=1)
 
     # first, do all that use the regular unet
-    unet = SDXLUNet.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
-    unet.to(dtype=torch.float16, device='cuda')
+    unet = SDXLUNet.load_fp16('cuda')
 
     def sdxl_controlnet_inpaint():
         controlnet = SDXLControlNet.from_pretrained("output/sdxl_controlnet_inpaint_9_16_resume_from_80000_batch_size_168/checkpoint-160000/controlnet")
@@ -98,16 +114,25 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=masked_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images("regular controlnet architecture", images)
+        for prompts_, masked_images_ in zip(split_list(prompts, chunk_size), masked_images.split(chunk_size)):
+            masked_images_ = torch.concat([masked_images_, masked_images_])
+
+            images = pipe(
+                prompts_,
+                image=masked_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images("regular controlnet architecture", images[0:4], idx)
+            idx += 1
+            log_images("regular controlnet architecture", images[4:], idx)
+            idx += 1
+
 
     def sdxl_controlnet_inpaint_full():
         controlnet = SDXLControlNetFull.from_pretrained("output/sdxl_controlnet_inpaint_full/checkpoint-52000/controlnet")
@@ -124,19 +149,30 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=masked_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('"full" controlnet architecture', images)
+        for prompts_, masked_images_ in zip(split_list(prompts, chunk_size), masked_images.split(chunk_size)):
+            masked_images_ = torch.concat([masked_images_, masked_images_])
+
+            images = pipe(
+                prompts_,
+                image=masked_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images('"full" controlnet architecture', images[0:4], idx)
+            idx += 1
+            log_images('"full" controlnet architecture', images[4:], idx)
+            idx += 1
 
     def sdxl_controlnet_inpaint_pre_encoded_controlnet_cond():
-        controlnet = SDXLControlNetPreEncodedControlnetCond.from_pretrained("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond/checkpoint-28000/controlnet")
+        checkpoint = get_latest_checkpoint("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond")
+
+        controlnet = SDXLControlNetPreEncodedControlnetCond.from_pretrained(os.path.join(checkpoint, "controlnet"))
+
         controlnet.to(dtype=torch.float16, device='cuda')
 
         pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
@@ -150,24 +186,35 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=vae_encoded_masked_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('regular controlnet architecture with vae encoding control', images)
+        for prompts_, vae_encoded_masked_images_ in zip(split_list(prompts, chunk_size), vae_encoded_masked_images.split(chunk_size)):
+            vae_encoded_masked_images_ = torch.concat([vae_encoded_masked_images_, vae_encoded_masked_images_])
+
+            images = pipe(
+                prompts_,
+                image=vae_encoded_masked_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images('regular controlnet architecture with vae encoding control', images[0:4], idx)
+            idx += 1
+            log_images('regular controlnet architecture with vae encoding control', images[4:], idx)
+            idx += 1
 
     # from now on we can mutate the unet weights
 
     def sdxl_controlnet_inpaint_train_base_unet():
-        controlnet = SDXLControlNet.from_pretrained("output/sdxl_controlnet_inpaint_train_base_unet/checkpoint-30000/controlnet")
+        checkpoint = get_latest_checkpoint("output/sdxl_controlnet_inpaint_train_base_unet")
+
+        controlnet = SDXLControlNet.from_pretrained(os.path.join(checkpoint, "controlnet"))
+
         controlnet.to(dtype=torch.float16, device='cuda')
 
-        unet_state_dict = load_safetensors_state_dict("output/sdxl_controlnet_inpaint_train_base_unet/checkpoint-30000/unet.safetensors")
+        unet_state_dict = load_safetensors_state_dict(os.path.join(checkpoint, "unet.safetensors"))
         unet.up_blocks.load_state_dict(unet_state_dict)
         unet.up_blocks.to(dtype=torch.float16, device='cuda')
 
@@ -182,22 +229,31 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=masked_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('regular controlnet architecture + train unet up blocks', images)
+        for prompts_, masked_images_ in zip(split_list(prompts, chunk_size), masked_images.split(chunk_size)):
+            masked_images_ = torch.concat([masked_images_, masked_images_])
+
+            images = pipe(
+                prompts_,
+                image=masked_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images('regular controlnet architecture + train unet up blocks', images[0:4], idx)
+            idx += 1
+            log_images('regular controlnet architecture + train unet up blocks', images[4:], idx)
+            idx += 1
 
     def sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet():
-        controlnet = SDXLControlNetPreEncodedControlnetCond.from_pretrained("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet/checkpoint-27000/controlnet")
+        checkpoint = get_latest_checkpoint("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet")
+        controlnet = SDXLControlNetPreEncodedControlnetCond.from_pretrained(os.path.join(checkpoint, "controlnet"))
         controlnet.to(dtype=torch.float16, device='cuda')
 
-        unet_state_dict = load_safetensors_state_dict("output/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_train_base_unet/checkpoint-27000/unet.safetensors")
+        unet_state_dict = load_safetensors_state_dict(os.path.join(checkpoint, "unet.safetensors"))
         unet.up_blocks.load_state_dict(unet_state_dict)
         unet.up_blocks.to(dtype=torch.float16, device='cuda')
 
@@ -212,16 +268,24 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=vae_encoded_masked_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images)
+        for prompts_, vae_encoded_masked_images_ in zip(split_list(prompts, chunk_size), vae_encoded_masked_images.split(chunk_size)):
+            vae_encoded_masked_images_ = torch.concat([vae_encoded_masked_images_, vae_encoded_masked_images_])
+
+            images = pipe(
+                prompts_,
+                image=vae_encoded_masked_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images[0:4], idx)
+            idx += 1
+            log_images('regular controlnet architecture with vae encoding control + train unet up blocks', images[4:], idx)
+            idx += 1
 
     pil_images = []
     pil_mask_images = []
@@ -244,17 +308,23 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=pil_images,
-            mask_image=pil_mask_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('base sdxl inpainting', images)
+        for prompts_, pil_images_, pil_mask_images_ in zip(split_list(prompts, chunk_size), split_list(pil_images, chunk_size), split_list(pil_mask_images, chunk_size)):
+            images: List[Image.Image] = pipe(
+                prompts_,
+                image=pil_images_,
+                mask_image=pil_mask_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images("base sdxl inpainting", images[0:4], idx)
+            idx += 1
+            log_images("base sdxl inpainting", images[4:], idx)
+            idx += 1
 
     def diffusers_finetuned_sdxl_inpainting_01():
         pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
@@ -266,26 +336,29 @@ def main():
         )
         pipe.to("cuda")
 
-        images: List[Image.Image] = pipe(
-            prompts,
-            image=pil_images,
-            mask_image=pil_mask_images,
-            negative_prompt=[negative_prompt]*len(prompts),
-            generator=torch.Generator().manual_seed(0),
-            height=1024,
-            width=1024,
-        ).images
+        idx = 0
 
-        log_images('diffusers finetuned sdxl inpaint 0.1', images)
+        for prompts_, pil_images_, pil_mask_images_ in zip(split_list(prompts, chunk_size), split_list(pil_images, chunk_size), split_list(pil_mask_images, chunk_size)):
+            images: List[Image.Image] = pipe(
+                prompts_,
+                image=pil_images_,
+                mask_image=pil_mask_images_,
+                negative_prompt=[negative_prompt]*len(prompts_),
+                generator=torch.Generator().manual_seed(0),
+                height=1024,
+                width=1024,
+            ).images
+
+            log_images("diffusers finetuned sdxl inpaint 0.1", images[0:4], idx)
+            idx += 1
+            log_images("diffusers finetuned sdxl inpaint 0.1", images[4:], idx)
+            idx += 1
 
 
-    def log_images(model_name, images):
-        for sample_idx in range(len(validation_data)):
-            row = [model_name]
-
-            row += images[sample_idx:sample_idx+num_images_per_validation]
-
-            tables[sample_idx].add_data(*row)
+    def log_images(model_name, images, idx):
+        row = [model_name]
+        row += [wandb.Image(x) for x in images]
+        tables[idx].add_data(*row)
 
 
     sdxl_controlnet_inpaint()
@@ -301,6 +374,21 @@ def main():
         table = tables[i]
         wandb.log({prompt: table})
 
+def split_list(input_list, chunk_size):
+    return [input_list[i:i + chunk_size] for i in range(0, len(input_list), chunk_size)]
+
+def get_latest_checkpoint(path):
+    checkpoints = os.listdir(path)
+
+    checkpoints = [x.split('-')[1] for x in checkpoints]
+
+    checkpoints.sort()
+
+    latest_checkpoint = checkpoints[-1]
+
+    latest_checkpoint = os.path.join(path, f"checkpoint-{latest_checkpoint}")
+
+    return latest_checkpoint
 
 if __name__ == "__main__":
     main()
