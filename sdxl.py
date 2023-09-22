@@ -80,19 +80,11 @@ def init_sdxl():
 
     if training_config.training == "sdxl_unet":
         if training_config.resume_from is not None:
-            unet_repo = training_config.resume_from
+            unet = SDXLUNet.load(training_config.resume_from)
         else:
-            unet_repo = repo
-
-        unet = SDXLUNet.from_pretrained(
-            unet_repo,
-            subfolder="unet",
-        )
+            unet = SDXLUNet.load_fp32()
     elif training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet:
-        unet = SDXLUNet.from_pretrained(
-            repo,
-            subfolder="unet",
-        )
+        unet = SDXLUNet.load_fp32()
 
         if training_config.resume_from is not None:
             unet_state_dict = load_safetensors_state_dict(os.path.join(training_config.resume_from, "unet.safetensors"))
@@ -104,12 +96,7 @@ def init_sdxl():
             if len(load_sd_results.unexpected_keys) > 0:
                 raise ValueError(f"error loading state dict: {load_sd_results.unexpected_keys}")
     else:
-        unet = SDXLUNet.from_pretrained(
-            repo,
-            subfolder="unet",
-            variant="fp16",
-            torch_dtype=torch.float16,
-        )
+        unet = SDXLUNet.load_fp16()
 
     unet.to(device=device_id)
     # TODO - add back

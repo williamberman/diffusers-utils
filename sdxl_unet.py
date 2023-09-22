@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
+import os
 
 import torch
 import torch.nn.functional as F
 from diffusers import UNet2DConditionModel
 from diffusers.utils.outputs import BaseOutput
 from torch import nn
+from utils import load_model
 
 from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
 
@@ -271,14 +273,23 @@ class SDXLUNet(UNet2DConditionModel):
         return config
 
     @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        diffusers_unet = UNet2DConditionModel.from_pretrained(*args, **kwargs)
-        unet = cls()
-        unet.load_state_dict(diffusers_unet.state_dict())
-        return unet
+    def load(cls, load_from, device):
+        if os.path.isdir(load_from):
+            load_from = os.path.join(load_from, "diffusion_pytorch_model.safetensors")
+
+        return load_model(cls, load_from, device)
+
+    @classmethod
+    def load_fp32(cls, device=None):
+        return cls.load('./weights/sdxl_unet.safetensors', device=device, dtype=torch.float32)
+
+    @classmethod
+    def load_fp16(cls, device=None):
+        return cls.load('./weights/sdxl_unet.fp16.safetensors', device=device, dtype=torch.float16)
 
     def save_pretrained(self, *args, **kwargs):
         diffusers_unet = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
         sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
         diffusers_unet.load_state_dict(sd)
         diffusers_unet.save_pretrained(*args, **kwargs)
+
