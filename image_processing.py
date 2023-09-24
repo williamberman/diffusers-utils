@@ -1,3 +1,13 @@
+from typing import Literal
+
+import mediapipe as mp
+import numpy as np
+import torch
+from mediapipe import solutions
+from mediapipe.framework.formats import landmark_pb2
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from PIL import Image
 import random
 from typing import Literal
 
@@ -6,9 +16,84 @@ import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
+from typing import Literal
 
-masking_types = ["full", "rectangle", "irregular", "outpainting"]
+import numpy as np
+import torch
+from controlnet_aux import OpenposeDetector
+from PIL import Image
+import cv2
 
+from training_config import training_config
+
+# General instructions: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/python
+#
+# Available models: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/index#models
+#
+# requires downloading model to root of repo i.e.
+# `wget https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task -O pose_landmarker.task`
+
+mediapipe_pose_detector = None
+_init_mediapipe_pose_called = False
+
+
+def init_mediapipe_pose():
+    global _init_mediapipe_pose_called, mediapipe_pose_detector
+
+    if _init_mediapipe_pose_called:
+        return
+
+    _init_mediapipe_pose_called = True
+
+    base_options = python.BaseOptions(model_asset_path="pose_landmarker.task")
+    options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
+    mediapipe_pose_detector = vision.PoseLandmarker.create_from_options(options)
+
+
+def mediapipe_pose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
+    init_mediapipe_pose()
+
+    numpy_image = np.array(image)
+
+    height, width = numpy_image.shape[:2]
+
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=numpy_image)
+
+    detection_result = mediapipe_pose_detector.detect(mp_image)
+
+    pose_landmarks = detection_result.pose_landmarks
+
+    if len(pose_landmarks) == 0:
+        return None
+
+    pose = np.zeros((height, width, 3), dtype=np.uint8)
+    draw_landmarks_on_image(pose, pose_landmarks)
+
+    if return_type == "vae_scaled_tensor":
+        pose = torch.tensor(pose)
+        pose = pose.permute(2, 0, 1)
+        pose = pose.float()
+        pose = pose / 255.0
+    elif return_type == "pil":
+        pose = Image.fromarray(pose)
+    else:
+        assert False
+
+    return pose
+
+
+def draw_landmarks_on_image(pose, pose_landmarks):
+    for idx in range(len(pose_landmarks)):
+        pose_landmarks = pose_landmarks[idx]
+
+        pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+        pose_landmarks_proto.landmark.extend([landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks])
+        solutions.drawing_utils.draw_landmarks(
+            pose,
+            pose_landmarks_proto,
+            solutions.pose.POSE_CONNECTIONS,
+            solutions.drawing_styles.get_default_pose_landmarks_style(),
+        )
 
 # NOTE that this pil image cannot be used with the actual
 # network because it uses 0 for the masked pixel insted of -1.
@@ -51,6 +136,8 @@ def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor", "v
 
     return image, mask
 
+
+masking_types = ["full", "rectangle", "irregular", "outpainting"]
 
 def make_mask(height, width):
     mask_type = random.choice(masking_types)
@@ -176,3 +263,64 @@ def apply_padding(mask, coord):
     ] = 1
 
     return mask
+
+
+open_pose = None
+_init_openpose_called = False
+
+
+def init_openpose():
+    global open_pose, _init_openpose_called
+
+    if _init_openpose_called:
+        return
+
+    _init_openpose_called = True
+
+    open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+
+
+def openpose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
+    init_openpose()
+
+    pose = open_pose(
+        image,
+        detect_resolution=training_config.resolution,
+        image_resolution=training_config.resolution,
+    )
+
+    pose = np.array(pose)
+
+    if (pose == 0).all():
+        return None
+
+    if return_type == "vae_scaled_tensor":
+        pose = torch.tensor(pose)
+        pose = pose.permute(2, 0, 1)
+        pose = pose.float()
+        pose = pose / 255.0
+    elif return_type == "pil":
+        pose = Image.fromarray(pose)
+    else:
+        assert False
+
+    return pose
+
+
+def make_canny_conditioning(
+    image,
+    return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor",
+):
+    controlnet_image = np.array(image)
+    controlnet_image = cv2.Canny(controlnet_image, 100, 200)
+    controlnet_image = controlnet_image[:, :, None]
+    controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
+
+    if return_type == "controlnet_scaled_tensor":
+        controlnet_image = TF.to_tensor(controlnet_image)
+    elif return_type == "pil":
+        controlnet_image = Image.fromarray(controlnet_image)
+    else:
+        assert False
+
+    return controlnet_image

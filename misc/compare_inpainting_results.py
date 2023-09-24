@@ -6,7 +6,7 @@ import torch
 from diffusers import AutoencoderKL, StableDiffusionXLControlNetPipeline, StableDiffusionXLInpaintPipeline
 from PIL import Image
 import numpy as np
-from masking import make_masked_image, masked_image_as_pil
+from image_processing import make_masked_image, masked_image_as_pil
 from typing import List
 import wandb
 from utils import load_safetensors_state_dict

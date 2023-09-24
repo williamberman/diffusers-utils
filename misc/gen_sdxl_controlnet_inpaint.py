@@ -7,7 +7,7 @@ from diffusers import (
 from argparse import ArgumentParser
 from PIL import Image
 from typing import List
-from masking import make_masked_image, masked_image_as_pil
+from image_processing import make_masked_image, masked_image_as_pil
 from blocks import SDXLControlNet, SDXLUNet
 from utils import load_safetensors_state_dict
 

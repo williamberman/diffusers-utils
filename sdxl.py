@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Literal, Union
+from typing import Union
 
 import numpy as np
 import torch
@@ -292,13 +292,13 @@ def make_sample(d):
 
     if training_config.training == "sdxl_adapter":
         if training_config.adapter_type == "mediapipe_pose":
-            from mediapipe_pose import mediapipe_pose_adapter_image
+            from image_processing import mediapipe_pose_adapter_image
 
             adapter_image = mediapipe_pose_adapter_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
 
             sample["adapter_image"] = adapter_image
         elif training_config.adapter_type == "openpose":
-            from openpose import openpose_adapter_image
+            from image_processing import openpose_adapter_image
 
             adapter_image = openpose_adapter_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
 
@@ -312,7 +312,7 @@ def make_sample(d):
 
             sample["controlnet_image"] = controlnet_image
         elif training_config.controlnet_type == "inpainting":
-            from masking import make_masked_image
+            from image_processing import make_masked_image
 
             if training_config.controlnet_variant == "pre_encoded_controlnet_cond":
                 controlnet_image, controlnet_image_mask = make_masked_image(resized_and_cropped_image, return_type="vae_scaled_tensor")
@@ -624,12 +624,12 @@ def get_validation_images(validation_image_path):
 
     if training_config.training == "sdxl_adapter":
         if training_config.adapter_type == "mediapipe_pose":
-            from mediapipe_pose import mediapipe_pose_adapter_image
+            from image_processing import mediapipe_pose_adapter_image
 
             validation_image = mediapipe_pose_adapter_image(validation_image, return_type="pil")
             log_validation_image = validation_image
         elif training_config.adapter_type == "openpose":
-            from openpose import openpose_adapter_image
+            from image_processing import openpose_adapter_image
 
             validation_image = openpose_adapter_image(validation_image, return_type="pil")
             log_validation_image = validation_image
@@ -637,10 +637,12 @@ def get_validation_images(validation_image_path):
             assert False
     elif training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
+            from image_processing import make_canny_conditioning
+
             validation_image = make_canny_conditioning(validation_image, return_type="pil")
             log_validation_image = validation_image
         elif training_config.controlnet_type == "inpainting":
-            from masking import make_mask, make_masked_image
+            from image_processing import make_mask, make_masked_image
 
             controlnet_image_mask = make_mask(validation_image.height, validation_image.width)
             log_validation_image = Image.fromarray(np.array(validation_image) * (controlnet_image_mask[:, :, None] < 0.5))
@@ -687,24 +689,3 @@ def get_sigmas(timesteps, n_dim=4):
         sigma = sigma.unsqueeze(-1)
 
     return sigma
-
-
-def make_canny_conditioning(
-    image,
-    return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor",
-):
-    import cv2
-
-    controlnet_image = np.array(image)
-    controlnet_image = cv2.Canny(controlnet_image, 100, 200)
-    controlnet_image = controlnet_image[:, :, None]
-    controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
-
-    if return_type == "controlnet_scaled_tensor":
-        controlnet_image = TF.to_tensor(controlnet_image)
-    elif return_type == "pil":
-        controlnet_image = Image.fromarray(controlnet_image)
-    else:
-        assert False
-
-    return controlnet_image
