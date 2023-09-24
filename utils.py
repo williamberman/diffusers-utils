@@ -1,8 +1,8 @@
+import torch
 from safetensors import safe_open
+from safetensors.torch import load_file
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-import torch
-from safetensors.torch import load_file
 
 
 # TODO remove
@@ -33,10 +33,11 @@ def maybe_ddp_module(m):
         m = m.module
     return m
 
+
 def load_model(model_constructor, state_dict_path, device):
     import load_state_dict_patch
 
-    with torch.device('meta'):
+    with torch.device("meta"):
         model = model_constructor()
 
     state_dict = load_file(state_dict_path, device=device)

@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
+import wandb
 import webdataset as wds
 from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
                        StableDiffusionXLAdapterPipeline,
@@ -19,14 +20,14 @@ from torchvision import transforms
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizer)
 
-import wandb
 from sdxl_controlnet import SDXLControlNet
 from sdxl_controlnet_full import SDXLControlNetFull
 from sdxl_controlnet_pre_encoded_controlnet_cond import \
     SDXLControlNetPreEncodedControlnetCond
 from sdxl_unet import SDXLUNet
 from training_config import training_config
-from utils import maybe_ddp_dtype, maybe_ddp_module, load_safetensors_state_dict
+from utils import (load_safetensors_state_dict, maybe_ddp_dtype,
+                   maybe_ddp_module)
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
@@ -190,13 +191,11 @@ def get_sdxl_dataset():
 
     return dataset
 
-def get_sdxl_dummy_dataset():
-    image = Image.open('./validation_data/two_birds_on_branch.png').convert('RGB')
 
-    metadata = {
-        "original_height": image.height,
-        "original_width": image.width
-    }
+def get_sdxl_dummy_dataset():
+    image = Image.open("./validation_data/two_birds_on_branch.png").convert("RGB")
+
+    metadata = {"original_height": image.height, "original_width": image.width}
 
     text = "two birds on a branch"
 
@@ -219,6 +218,7 @@ def get_sdxl_dummy_dataset():
                 yield default_collate(batch)
 
     return Dataset()
+
 
 @torch.no_grad()
 def make_sample(d):

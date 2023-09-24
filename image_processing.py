@@ -1,28 +1,17 @@
+import random
 from typing import Literal
 
+import cv2
 import mediapipe as mp
 import numpy as np
 import torch
+import torchvision.transforms.functional as TF
+from controlnet_aux import OpenposeDetector
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from PIL import Image
-import random
-from typing import Literal
-
-import cv2
-import numpy as np
-import torch
-import torchvision.transforms.functional as TF
-from PIL import Image
-from typing import Literal
-
-import numpy as np
-import torch
-from controlnet_aux import OpenposeDetector
-from PIL import Image
-import cv2
 
 from training_config import training_config
 
@@ -95,6 +84,7 @@ def draw_landmarks_on_image(pose, pose_landmarks):
             solutions.drawing_styles.get_default_pose_landmarks_style(),
         )
 
+
 # NOTE that this pil image cannot be used with the actual
 # network because it uses 0 for the masked pixel insted of -1.
 # It is used just for logging the masked image
@@ -138,6 +128,7 @@ def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor", "v
 
 
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
+
 
 def make_mask(height, width):
     mask_type = random.choice(masking_types)

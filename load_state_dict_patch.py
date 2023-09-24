@@ -1,9 +1,12 @@
-from typing import Mapping, Any, List
-from collections import OrderedDict
-from torch.nn.modules.module import _IncompatibleKeys, _EXTRA_STATE_KEY_SUFFIX
 import itertools
-from torch.nn import Module
+from collections import OrderedDict
+from typing import Any, List, Mapping
+
 import torch
+from torch.nn import Module
+from torch.nn.modules.module import _EXTRA_STATE_KEY_SUFFIX, _IncompatibleKeys
+
+# fmt: off
 
 # this patch is for adding the `assign` key to load_state_dict.
 # the code is in pytorch source for version 2.1
@@ -206,12 +209,6 @@ def load_state_dict(self, state_dict: Mapping[str, Any],
 if [int(x) for x in torch.__version__.split('.')[0:2]] < [2, 1]:
     Module._load_from_state_dict = _load_from_state_dict
     Module.load_state_dict = load_state_dict
-from typing import Mapping, Any, List
-from collections import OrderedDict
-from torch.nn.modules.module import _IncompatibleKeys, _EXTRA_STATE_KEY_SUFFIX
-import itertools
-from torch.nn import Module
-import torch
 
 # this patch is for adding the `assign` key to load_state_dict.
 # the code is in pytorch source for version 2.1
@@ -414,3 +411,5 @@ def load_state_dict(self, state_dict: Mapping[str, Any],
 if [int(x) for x in torch.__version__.split('.')[0:2]] < [2, 1]:
     Module._load_from_state_dict = _load_from_state_dict
     Module.load_state_dict = load_state_dict
+
+# fmt: on

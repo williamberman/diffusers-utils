@@ -7,6 +7,7 @@ from logging import getLogger
 import safetensors.torch
 import torch
 import torch.distributed as dist
+import wandb
 from bitsandbytes.optim import AdamW8bit
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.utils import clip_grad_norm_
@@ -14,7 +15,6 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-import wandb
 from training_config import load_training_config, training_config
 from utils import maybe_ddp_module
 
