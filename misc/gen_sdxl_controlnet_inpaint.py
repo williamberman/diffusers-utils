@@ -2,14 +2,13 @@ import torch
 from diffusers import (
     StableDiffusionXLControlNetPipeline,
     AutoencoderKL,
-    UNet2DConditionModel
 )
 from argparse import ArgumentParser
 from PIL import Image
 from typing import List
-from image_processing import make_masked_image, masked_image_as_pil
-from blocks import SDXLControlNet, SDXLUNet
-from utils import load_safetensors_state_dict
+from utils import make_masked_image, masked_image_as_pil
+from sdxl_controlnet import SDXLControlNet
+from sdxl_unet import SDXLUNet
 
 
 def main():
@@ -17,20 +16,12 @@ def main():
     args.add_argument("--controlnet_path", required=True, type=str)
     args = args.parse_args()
 
-    unet_ = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
-
-    unet = SDXLUNet()
-    unet.load_state_dict(unet_.state_dict())
-    unet.to(dtype=torch.float16)
-
-    del unet_
+    unet = SDXLUNet.load_fp16(device='cuda')
 
     # controlnet = ControlNetModel.from_pretrained(
     #     args.controlnet_path, torch_dtype=torch.float16
     # )
-    controlnet = SDXLControlNet()
-    controlnet.load_state_dict(load_safetensors_state_dict(args.controlnet_path))
-    controlnet.to(dtype=torch.float16)
+    controlnet = SDXLControlNet.load(args.controlnet_path, device='cuda', dtype=torch.float16)
 
     vae = AutoencoderKL.from_pretrained(
         "madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16

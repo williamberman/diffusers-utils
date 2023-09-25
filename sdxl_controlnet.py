@@ -7,33 +7,11 @@ from diffusers import ControlNetModel
 from diffusers.utils.outputs import BaseOutput
 from torch import nn
 
-from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
-from utils import maybe_ddp_module, zero_module
+from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
+                   get_sinusoidal_embedding, maybe_ddp_module, zero_module)
 
 
-@dataclass
-class ControlNetOutput(BaseOutput):
-    """
-    The output of [`ControlNetModel`].
-
-    Args:
-        down_block_res_samples (`tuple[torch.Tensor]`):
-            A tuple of downsample activations at different resolutions for each downsampling block. Each tensor should
-            be of shape `(batch_size, channel * resolution, height //resolution, width // resolution)`. Output can be
-            used to condition the original UNet's downsampling activations.
-        mid_down_block_re_sample (`torch.Tensor`):
-            The activation of the midde block (the lowest sample resolution). Each tensor should be of shape
-            `(batch_size, channel * lowest_resolution, height // lowest_resolution, width // lowest_resolution)`.
-            Output can be used to condition the original UNet's middle block activation.
-    """
-
-    down_block_res_samples: Tuple[torch.Tensor]
-    mid_block_res_sample: torch.Tensor
-    add_to_down_block_inputs: Optional[Tuple[torch.Tensor]]
-    add_to_output: Optional[torch.Tensor]
-
-
-class SDXLControlNet(ControlNetModel):
+class SDXLControlNet(ControlNetModel, ModelUtils):
     def __init__(self):
         super().__init__()
 
@@ -231,25 +209,6 @@ class SDXLControlNet(ControlNetModel):
             add_to_output=None,
         )
 
-    # methods to mimic diffusers
-
-    @property
-    def dtype(self):
-        return next(self.parameters()).dtype
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained(*args, **kwargs)
-        controlnet = cls()
-        controlnet.load_state_dict(diffusers_controlnet.state_dict())
-        return controlnet
-
-    def save_pretrained(self, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained("diffusers/controlnet-canny-sdxl-1.0")
-        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
-        diffusers_controlnet.load_state_dict(sd)
-        diffusers_controlnet.save_pretrained(*args, **kwargs)
-
     @classmethod
     def from_unet(cls, unet):
         unet = maybe_ddp_module(unet)
@@ -265,3 +224,11 @@ class SDXLControlNet(ControlNetModel):
         controlnet.mid_block.load_state_dict(unet.mid_block.state_dict())
 
         return controlnet
+
+    # methods to mimic diffusers
+
+    def save_pretrained(self, *args, **kwargs):
+        diffusers_controlnet = ControlNetModel.from_pretrained("diffusers/controlnet-canny-sdxl-1.0")
+        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
+        diffusers_controlnet.load_state_dict(sd)
+        diffusers_controlnet.save_pretrained(*args, **kwargs)

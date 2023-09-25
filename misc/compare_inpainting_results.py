@@ -6,12 +6,12 @@ import torch
 from diffusers import AutoencoderKL, StableDiffusionXLControlNetPipeline, StableDiffusionXLInpaintPipeline
 from PIL import Image
 import numpy as np
-from image_processing import make_masked_image, masked_image_as_pil
+from utils import make_masked_image, masked_image_as_pil
 from typing import List
 import wandb
-from utils import load_safetensors_state_dict
 import torchvision.transforms.functional as TF
 import os
+import safetensors.torch
 
 
 torch.set_grad_enabled(False)
@@ -226,7 +226,7 @@ def main():
 
         controlnet.to(dtype=torch.float16, device='cuda')
 
-        unet_state_dict = load_safetensors_state_dict(os.path.join(checkpoint, "unet.safetensors"))
+        unet_state_dict = safetensors.torch.load_file(os.path.join(checkpoint, "unet.safetensors"), device='cuda')
         unet.up_blocks.load_state_dict(unet_state_dict)
         unet.up_blocks.to(dtype=torch.float16, device='cuda')
 
@@ -267,7 +267,7 @@ def main():
         controlnet = SDXLControlNetPreEncodedControlnetCond.from_pretrained(os.path.join(checkpoint, "controlnet"))
         controlnet.to(dtype=torch.float16, device='cuda')
 
-        unet_state_dict = load_safetensors_state_dict(os.path.join(checkpoint, "unet.safetensors"))
+        unet_state_dict = safetensors.torch.load_file(os.path.join(checkpoint, "unet.safetensors"), device='cuda')
         unet.up_blocks.load_state_dict(unet_state_dict)
         unet.up_blocks.to(dtype=torch.float16, device='cuda')
 

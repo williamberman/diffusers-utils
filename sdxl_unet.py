@@ -1,31 +1,16 @@
-import os
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
 from diffusers import UNet2DConditionModel
-from diffusers.utils.outputs import BaseOutput
 from torch import nn
 
-from blocks import ResnetBlock2D, Transformer2DModel, get_sinusoidal_embedding
-from utils import load_model
+from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
+                   get_sinusoidal_embedding)
 
 
-@dataclass
-class UNet2DConditionOutput(BaseOutput):
-    """
-    The output of [`UNet2DConditionModel`].
-
-    Args:
-        sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)`):
-            The hidden states output conditioned on `encoder_hidden_states` input. Output of last layer of model.
-    """
-
-    sample: torch.FloatTensor = None
-
-
-class SDXLUNet(UNet2DConditionModel):
+class SDXLUNet(UNet2DConditionModel, ModelUtils):
     def __init__(self):
         super().__init__()
 
@@ -250,16 +235,15 @@ class SDXLUNet(UNet2DConditionModel):
         if add_to_output is not None:
             sample = sample + add_to_output
 
-        if not return_dict:
-            return (sample,)
+    @classmethod
+    def load_fp32(cls, device=None):
+        return cls.load("./weights/sdxl_unet.safetensors", device=device)
 
-        return UNet2DConditionOutput(sample=sample)
+    @classmethod
+    def load_fp16(cls, device=None):
+        return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device)
 
     # methods to mimic diffusers
-
-    @property
-    def dtype(self):
-        return next(self.parameters()).dtype
 
     @property
     def config(self):
@@ -271,21 +255,6 @@ class SDXLUNet(UNet2DConditionModel):
         config = SDXLUnetConfig()
 
         return config
-
-    @classmethod
-    def load(cls, load_from, device):
-        if os.path.isdir(load_from):
-            load_from = os.path.join(load_from, "diffusion_pytorch_model.safetensors")
-
-        return load_model(cls, load_from, device)
-
-    @classmethod
-    def load_fp32(cls, device=None):
-        return cls.load("./weights/sdxl_unet.safetensors", device=device)
-
-    @classmethod
-    def load_fp16(cls, device=None):
-        return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device)
 
     def save_pretrained(self, *args, **kwargs):
         diffusers_unet = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
