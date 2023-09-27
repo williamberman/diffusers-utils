@@ -10,42 +10,38 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import wandb
 import webdataset as wds
-from diffusers import (AutoencoderKL, EulerDiscreteScheduler,
-                       StableDiffusionXLAdapterPipeline,
-                       StableDiffusionXLControlNetPipeline,
-                       StableDiffusionXLPipeline, T2IAdapter)
+from diffusers import T2IAdapter
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
 from torchvision import transforms
-from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
-                          CLIPTokenizer)
+from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
+from diffusion import (default_num_train_timesteps, make_sigmas,
+                       sdxl_diffusion_loop)
 from sdxl_controlnet import SDXLControlNet
 from sdxl_controlnet_full import SDXLControlNetFull
 from sdxl_controlnet_pre_encoded_controlnet_cond import \
     SDXLControlNetPreEncodedControlnetCond
 from sdxl_unet import SDXLUNet
+from sdxl_vae import SDXLVae
 from training_config import training_config
-from utils import maybe_ddp_dtype, maybe_ddp_module
+from utils import (maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
+                   sdxl_tokenize_one, sdxl_tokenize_two)
 
 repo = "stabilityai/stable-diffusion-xl-base-1.0"
 
 device_id = int(os.environ["LOCAL_RANK"])
 
-vae: AutoencoderKL = None
-
-tokenizer_one = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer")
+vae: SDXLVae = None
 
 text_encoder_one: CLIPTextModel = None
-
-tokenizer_two = CLIPTokenizer.from_pretrained(repo, subfolder="tokenizer_2")
 
 text_encoder_two: CLIPTextModelWithProjection = None
 
 unet: SDXLUNet = None
 
-scheduler: EulerDiscreteScheduler = None
+sigmas: torch.Tensor = None
 
 adapter: T2IAdapter = None
 
@@ -55,7 +51,7 @@ _init_sdxl_called = False
 
 
 def init_sdxl():
-    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, scheduler, adapter, controlnet
+    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, sigmas, adapter, controlnet
 
     if _init_sdxl_called:
         raise ValueError("`init_sdxl` called more than once")
@@ -72,12 +68,11 @@ def init_sdxl():
     text_encoder_two.requires_grad_(False)
     text_encoder_two.eval()
 
-    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
-    vae.to(device=device_id)
+    vae = SDXLVae.load_fp16_fix(device=device_id)
     vae.requires_grad_(False)
     vae.eval()
 
-    scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
+    sigmas = make_sigmas().to(device=device_id)
 
     if training_config.training == "sdxl_unet":
         if training_config.resume_from is not None:
@@ -256,7 +251,7 @@ def make_sample(d):
     original_width = int(metadata.get("original_width", 0.0))
     original_height = int(metadata.get("original_height", 0.0))
 
-    time_ids = torch.tensor(
+    micro_conditioning = torch.tensor(
         [
             original_width,
             original_height,
@@ -267,24 +262,12 @@ def make_sample(d):
         ]
     )
 
-    text_input_ids_one = tokenizer_one(
-        text,
-        padding="max_length",
-        max_length=tokenizer_one.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-    ).input_ids[0]
+    text_input_ids_one = sdxl_tokenize_one(text)
 
-    text_input_ids_two = tokenizer_two(
-        text,
-        padding="max_length",
-        max_length=tokenizer_two.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-    ).input_ids[0]
+    text_input_ids_two = sdxl_tokenize_two(text)
 
     sample = {
-        "time_ids": time_ids,
+        "micro_conditioning": micro_conditioning,
         "text_input_ids_one": text_input_ids_one,
         "text_input_ids_two": text_input_ids_two,
         "image": resized_and_cropped_and_normalized_image_tensor,
@@ -346,7 +329,7 @@ def sdxl_train_step(batch, global_step):
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
 
-        prompt_embeds, pooled_prompt_embeds_two = text_conditioning(text_input_ids_one, text_input_ids_two)
+        prompt_embeds, pooled_prompt_embeds_two = sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two)
 
         prompt_embeds = prompt_embeds.to(dtype=unet_dtype)
         pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet_dtype)
@@ -356,18 +339,19 @@ def sdxl_train_step(batch, global_step):
         if training_config.training == "sdxl_adapter":
             # Cubic sampling to sample a random timestep for each image
             timesteps = torch.rand((bsz,), device=device_id)
-            timesteps = (1 - timesteps**3) * scheduler.config.num_train_timesteps
-            timesteps = timesteps.long().to(scheduler.timesteps.dtype)
-            timesteps = timesteps.clamp(0, scheduler.config.num_train_timesteps - 1)
+            timesteps = (1 - timesteps**3) * default_num_train_timesteps
+            timesteps = timesteps.long()
+            timesteps = timesteps.clamp(0, default_num_train_timesteps - 1)
         else:
-            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (bsz,), device=device_id)
+            timesteps = torch.randint(0, default_num_train_timesteps, (bsz,), device=device_id)
+
+        sigmas_ = sigmas[timesteps].to(dtype=latents.dtype)
 
         noise = torch.randn_like(latents)
-        noisy_latents = scheduler.add_noise(latents, noise, timesteps)
 
-        sigmas = get_sigmas(timesteps)
-        sigmas = sigmas.to(device=noisy_latents.device, dtype=noisy_latents.dtype)
-        scaled_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
+        noisy_latents = latents + noise * sigmas_
+
+        scaled_noisy_latents = noisy_latents / ((sigmas_**2 + 1) ** 0.5)
 
         if training_config.training == "sdxl_controlnet":
             if training_config.controlnet_variant == "pre_encoded_controlnet_cond":
@@ -432,74 +416,7 @@ def sdxl_train_step(batch, global_step):
 
         loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
 
-        if False and dist.get_rank() == 0:
-            log_predicted_images(
-                noisy_latents=noisy_latents,
-                noise=noise,
-                sigmas=sigmas,
-                model_pred=model_pred,
-                timesteps=timesteps,
-                global_step=global_step,
-            )
-
     return loss
-
-
-@torch.no_grad()
-def text_conditioning(text_input_ids_one, text_input_ids_two):
-    prompt_embeds_1 = text_encoder_one(
-        text_input_ids_one,
-        output_hidden_states=True,
-    ).hidden_states[-2]
-
-    prompt_embeds_1 = prompt_embeds_1.view(prompt_embeds_1.shape[0], prompt_embeds_1.shape[1], -1)
-
-    prompt_embeds_2 = text_encoder_two(
-        text_input_ids_two,
-        output_hidden_states=True,
-    )
-
-    pooled_prompt_embeds_2 = prompt_embeds_2[0]
-
-    prompt_embeds_2 = prompt_embeds_2.hidden_states[-2]
-
-    prompt_embeds_2 = prompt_embeds_2.view(prompt_embeds_2.shape[0], prompt_embeds_2.shape[1], -1)
-
-    prompt_embeds = torch.cat((prompt_embeds_1, prompt_embeds_2), dim=-1)
-
-    return prompt_embeds, pooled_prompt_embeds_2
-
-
-@torch.no_grad()
-def log_predicted_images(noisy_latents, sigmas, noise, model_pred, timesteps, global_step):
-    os.makedirs("./output/test_out", exist_ok=True)
-
-    with torch.no_grad():
-        latent_predicted_img = noisy_latents[0:1] - sigmas[0:1] * model_pred[0:1]
-        latent_predicted_img = latent_predicted_img / vae.config.scaling_factor
-        latent_predicted_img = latent_predicted_img.to(torch.float16)
-        predicted_img = vae.decode(latent_predicted_img).sample
-        predicted_img = ((predicted_img * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
-        predicted_img = predicted_img[0]
-        predicted_img = predicted_img.permute(1, 2, 0)
-        predicted_img = predicted_img.cpu().numpy()
-        predicted_img = Image.fromarray(predicted_img)
-        predicted_img.save(f"./output/test_out/{global_step}-predicted.png")
-
-    with torch.no_grad():
-        actual_img = noisy_latents[0:1] - sigmas[0:1] * noise[0:1]
-        actual_img = actual_img / vae.config.scaling_factor
-        actual_img = actual_img.to(torch.float16)
-        actual_img = vae.decode(actual_img).sample
-        actual_img = ((actual_img * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8)
-        actual_img = actual_img[0]
-        actual_img = actual_img.permute(1, 2, 0)
-        actual_img = actual_img.cpu().numpy()
-        actual_img = Image.fromarray(actual_img)
-        actual_img.save(f"./output/test_out/{global_step}-actual.png")
-
-    with open(f"./output/test_out/{global_step}-{timesteps[0].item()}", "w") as f:
-        f.write("foo\n")
 
 
 _validation_images_logged = False
@@ -509,59 +426,20 @@ _validation_images_logged = False
 def sdxl_log_validation(step):
     global _validation_images_logged
 
-    # NOTE - this has to be different from the module level scheduler because
-    # the pipeline mutates it.
-    scheduler = EulerDiscreteScheduler.from_pretrained(repo, subfolder="scheduler")
+    unet_ = maybe_ddp_module(unet)
+    unet_.eval()
 
-    if training_config.training == "sdxl_unet":
-        unet_ = maybe_ddp_module(unet)
-        unet_.eval()
-
-        pipeline = StableDiffusionXLPipeline(
-            vae=vae,
-            text_encoder=text_encoder_one,
-            text_encoder_2=text_encoder_two,
-            unet=unet_,
-            scheduler=scheduler,
-            tokenizer=tokenizer_one,
-            tokenizer_2=tokenizer_two,
-        )
-    elif training_config.training == "sdxl_adapter":
+    if training_config.training == "sdxl_adapter":
         adapter_ = maybe_ddp_module(adapter)
         adapter_.eval()
+    else:
+        adapter_ = None
 
-        pipeline = StableDiffusionXLAdapterPipeline(
-            vae=vae,
-            text_encoder=text_encoder_one,
-            text_encoder_2=text_encoder_two,
-            unet=unet,
-            adapter=adapter_,
-            scheduler=scheduler,
-            tokenizer=tokenizer_one,
-            tokenizer_2=tokenizer_two,
-        )
-    elif training_config.training == "sdxl_controlnet":
+    if training_config.training == "sdxl_controlnet":
         controlnet_ = maybe_ddp_module(controlnet)
         controlnet_.eval()
-
-        if training_config.controlnet_train_base_unet:
-            unet_ = maybe_ddp_module(unet)
-            unet_.eval()
-        else:
-            unet_ = unet
-
-        pipeline = StableDiffusionXLControlNetPipeline(
-            vae=vae,
-            text_encoder=text_encoder_one,
-            text_encoder_2=text_encoder_two,
-            unet=unet_,
-            controlnet=controlnet_,
-            scheduler=scheduler,
-            tokenizer=tokenizer_one,
-            tokenizer_2=tokenizer_two,
-        )
     else:
-        assert False
+        controlnet_ = None
 
     formatted_validation_images = None
 
@@ -583,38 +461,34 @@ def sdxl_log_validation(step):
 
     output_validation_images = []
 
-    for i, validation_prompt in enumerate(training_config.validation_prompts):
-        args = {
-            "prompt": validation_prompt,
-            "generator": generator,
-            "height": training_config.resolution,
-            "width": training_config.resolution,
-        }
+    for formatted_validation_image, validation_prompt in zip(formatted_validation_images, training_config.validation_prompts):
+        for _ in range(training_config.num_validation_images):
+            with torch.autocast("cuda"):
+                x_0 = sdxl_diffusion_loop(
+                    prompts=validation_prompt,
+                    images=formatted_validation_image,
+                    unet=unet_,
+                    text_encoder_one=text_encoder_one,
+                    text_encoder_two=text_encoder_two,
+                    controlnet=controlnet_,
+                    adapter=adapter_,
+                    sigmas=sigmas,
+                    generator=generator,
+                )
 
-        if formatted_validation_images is not None:
-            args["image"] = formatted_validation_images[i]
+                x_0 = vae.decode(x_0)[0]
 
-        if training_config.training == "sdxl_adapter":
-            args["adapter_conditioning_scale"] = training_config.adapter_conditioning_scale
-            args["adapter_conditioning_factor"] = training_config.adapter_conditioning_factor
-
-        with torch.autocast("cuda"):
-            image = pipeline(**args).images[0]
-            output_validation_images.append(wandb.Image(image, caption=validation_prompt))
+                output_validation_images.append(wandb.Image(x_0, caption=validation_prompt))
 
     wandb.log({"validation": output_validation_images}, step=step)
 
-    if training_config.training == "sdxl_unet":
-        unet_.train()
-    elif training_config.training == "sdxl_adapter":
-        adapter_.train()
-    elif training_config.training == "sdxl_controlnet":
-        controlnet_.train()
+    unet_.train()
 
-        if training_config.controlnet_train_base_unet:
-            unet_.train()
-    else:
-        assert False
+    if adapter_ is not None:
+        adapter_.train()
+
+    if controlnet_ is not None:
+        controlnet_.train()
 
 
 def get_validation_images(validation_image_path):
@@ -675,17 +549,3 @@ def get_validation_images(validation_image_path):
         assert False
 
     return validation_image, log_validation_image
-
-
-def get_sigmas(timesteps, n_dim=4):
-    sigmas = scheduler.sigmas.to(device=timesteps.device)
-    schedule_timesteps = scheduler.timesteps.to(device=timesteps.device)
-
-    step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-
-    sigma = sigmas[step_indices].flatten()
-
-    while len(sigma.shape) < n_dim:
-        sigma = sigma.unsqueeze(-1)
-
-    return sigma

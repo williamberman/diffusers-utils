@@ -137,78 +137,64 @@ class SDXLUNet(UNet2DConditionModel, ModelUtils):
 
     def forward(
         self,
-        sample,
-        timesteps,
+        x_t,
+        t,
         encoder_hidden_states,
-        added_cond_kwargs=None,
-        down_block_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
+        micro_conditioning,
+        pooled_encoder_hidden_states,
+        down_block_additional_residuals: Optional[List[torch.Tensor]] = None,
         mid_block_additional_residual: Optional[torch.Tensor] = None,
-        add_to_down_block_inputs: Optional[Tuple[torch.Tensor]] = None,
-        add_to_output: Optional[Tuple[torch.Tensor]] = None,
-        return_dict=True,
-        # for compatibility with diffusers
-        cross_attention_kwargs=None,
+        add_to_down_block_inputs: Optional[List[torch.Tensor]] = None,
+        add_to_output: Optional[torch.Tensor] = None,
     ):
-        if isinstance(add_to_down_block_inputs, tuple):
-            add_to_down_block_inputs = list(add_to_down_block_inputs)
+        hidden_state = x_t
 
-        if isinstance(down_block_additional_residuals, tuple):
-            down_block_additional_residuals = list(down_block_additional_residuals)
+        t = self.get_sinusoidal_timestep_embedding(t)
+        t = t.to(dtype=hidden_state.dtype)
+        t = self.time_embedding["linear_1"](t)
+        t = self.time_embedding["act"](t)
+        t = self.time_embedding["linear_2"](t)
 
-        batch_size = sample.shape[0]
-
-        if len(timesteps.shape) == 0:
-            timesteps = timesteps[None]
-
-        if timesteps.shape[0] == 1 and timesteps.shape[0] != batch_size:
-            timesteps = timesteps.expand(batch_size)
-
-        timesteps = self.get_sinusoidal_timestep_embedding(timesteps)
-        timesteps = timesteps.to(dtype=sample.dtype)
-        timesteps = self.time_embedding["linear_1"](timesteps)
-        timesteps = self.time_embedding["act"](timesteps)
-        timesteps = self.time_embedding["linear_2"](timesteps)
-
-        additional_conditioning = self.get_sinusoidal_micro_conditioning_embedding(added_cond_kwargs["time_ids"])
-        additional_conditioning = additional_conditioning.to(dtype=sample.dtype)
+        additional_conditioning = self.get_sinusoidal_micro_conditioning_embedding(micro_conditioning)
+        additional_conditioning = additional_conditioning.to(dtype=hidden_state.dtype)
         additional_conditioning = additional_conditioning.flatten(1)
-        additional_conditioning = torch.concat([added_cond_kwargs["text_embeds"], additional_conditioning], dim=-1)
+        additional_conditioning = torch.concat([pooled_encoder_hidden_states, additional_conditioning], dim=-1)
         additional_conditioning = self.add_embedding["linear_1"](additional_conditioning)
         additional_conditioning = self.add_embedding["act"](additional_conditioning)
         additional_conditioning = self.add_embedding["linear_2"](additional_conditioning)
 
-        timesteps = timesteps + additional_conditioning
+        t = t + additional_conditioning
 
-        sample = self.conv_in(sample)
+        hidden_state = self.conv_in(hidden_state)
 
-        residuals = [sample]
+        residuals = [hidden_state]
 
         for down_block in self.down_blocks:
             for i, resnet in enumerate(down_block["resnets"]):
                 if add_to_down_block_inputs is not None:
-                    sample = sample + add_to_down_block_inputs.pop(0)
+                    hidden_state = hidden_state + add_to_down_block_inputs.pop(0)
 
-                sample = resnet(sample, timesteps)
+                hidden_state = resnet(hidden_state, t)
 
                 if "attentions" in down_block:
-                    sample = down_block["attentions"][i](sample, encoder_hidden_states)
+                    hidden_state = down_block["attentions"][i](hidden_state, encoder_hidden_states)
 
-                residuals.append(sample)
+                residuals.append(hidden_state)
 
             if "downsamplers" in down_block:
                 if add_to_down_block_inputs is not None:
-                    sample = sample + add_to_down_block_inputs.pop(0)
+                    hidden_state = hidden_state + add_to_down_block_inputs.pop(0)
 
-                sample = down_block["downsamplers"][0]["conv"](sample)
+                hidden_state = down_block["downsamplers"][0]["conv"](hidden_state)
 
-                residuals.append(sample)
+                residuals.append(hidden_state)
 
-        sample = self.mid_block["resnets"][0](sample, timesteps)
-        sample = self.mid_block["attentions"][0](sample, encoder_hidden_states)
-        sample = self.mid_block["resnets"][1](sample, timesteps)
+        hidden_state = self.mid_block["resnets"][0](hidden_state, t)
+        hidden_state = self.mid_block["attentions"][0](hidden_state, encoder_hidden_states)
+        hidden_state = self.mid_block["resnets"][1](hidden_state, t)
 
         if mid_block_additional_residual is not None:
-            sample = sample + mid_block_additional_residual
+            hidden_state = hidden_state + mid_block_additional_residual
 
         for up_block in self.up_blocks:
             for i, resnet in enumerate(up_block["resnets"]):
@@ -217,23 +203,27 @@ class SDXLUNet(UNet2DConditionModel, ModelUtils):
                 if down_block_additional_residuals is not None:
                     residual = residual + down_block_additional_residuals.pop()
 
-                sample = torch.concat([sample, residual], dim=1)
+                hidden_state = torch.concat([hidden_state, residual], dim=1)
 
-                sample = resnet(sample, timesteps)
+                hidden_state = resnet(hidden_state, t)
 
                 if "attentions" in up_block:
-                    sample = up_block["attentions"][i](sample, encoder_hidden_states)
+                    hidden_state = up_block["attentions"][i](hidden_state, encoder_hidden_states)
 
             if "upsamplers" in up_block:
-                sample = F.interpolate(sample, scale_factor=2.0, mode="nearest")
-                sample = up_block["upsamplers"][0]["conv"](sample)
+                hidden_state = F.interpolate(hidden_state, scale_factor=2.0, mode="nearest")
+                hidden_state = up_block["upsamplers"][0]["conv"](hidden_state)
 
-        sample = self.conv_norm_out(sample)
-        sample = self.conv_act(sample)
-        sample = self.conv_out(sample)
+        hidden_state = self.conv_norm_out(hidden_state)
+        hidden_state = self.conv_act(hidden_state)
+        hidden_state = self.conv_out(hidden_state)
 
         if add_to_output is not None:
-            sample = sample + add_to_output
+            hidden_state = hidden_state + add_to_output
+
+        eps_hat = hidden_state
+
+        return eps_hat
 
     @classmethod
     def load_fp32(cls, device=None):

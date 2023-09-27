@@ -4,7 +4,6 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 from diffusers import ControlNetModel
-from diffusers.utils.outputs import BaseOutput
 from torch import nn
 
 from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
@@ -126,39 +125,30 @@ class SDXLControlNet(ControlNetModel, ModelUtils):
 
     def forward(
         self,
-        sample,
-        timesteps,
+        x_t,
+        t,
         encoder_hidden_states,
+        micro_conditioning,
+        pooled_encoder_hidden_states,
         controlnet_cond,
-        conditioning_scale=1.0,
-        added_cond_kwargs=None,
-        return_dict=True,
-        # for compatibility with diffusers
-        guess_mode=None,
     ):
-        batch_size = sample.shape[0]
+        hidden_state = x_t
 
-        if len(timesteps.shape) == 0:
-            timesteps = timesteps[None]
+        t = self.get_sinusoidal_timestep_embedding(t)
+        t = t.to(dtype=hidden_state.dtype)
+        t = self.time_embedding["linear_1"](t)
+        t = self.time_embedding["act"](t)
+        t = self.time_embedding["linear_2"](t)
 
-        if timesteps.shape[0] == 1 and timesteps.shape[0] != batch_size:
-            timesteps = timesteps.expand(batch_size)
-
-        timesteps = self.get_sinusoidal_timestep_embedding(timesteps)
-        timesteps = timesteps.to(dtype=sample.dtype)
-        timesteps = self.time_embedding["linear_1"](timesteps)
-        timesteps = self.time_embedding["act"](timesteps)
-        timesteps = self.time_embedding["linear_2"](timesteps)
-
-        additional_conditioning = self.get_sinusoidal_micro_conditioning_embedding(added_cond_kwargs["time_ids"])
-        additional_conditioning = additional_conditioning.to(dtype=sample.dtype)
+        additional_conditioning = self.get_sinusoidal_micro_conditioning_embedding(micro_conditioning)
+        additional_conditioning = additional_conditioning.to(dtype=hidden_state.dtype)
         additional_conditioning = additional_conditioning.flatten(1)
-        additional_conditioning = torch.concat([added_cond_kwargs["text_embeds"], additional_conditioning], dim=-1)
+        additional_conditioning = torch.concat([pooled_encoder_hidden_states, additional_conditioning], dim=-1)
         additional_conditioning = self.add_embedding["linear_1"](additional_conditioning)
         additional_conditioning = self.add_embedding["act"](additional_conditioning)
         additional_conditioning = self.add_embedding["linear_2"](additional_conditioning)
 
-        timesteps = timesteps + additional_conditioning
+        t = t + additional_conditioning
 
         controlnet_cond = self.controlnet_cond_embedding["conv_in"](controlnet_cond)
         controlnet_cond = F.silu(controlnet_cond)
@@ -168,45 +158,38 @@ class SDXLControlNet(ControlNetModel, ModelUtils):
 
         controlnet_cond = self.controlnet_cond_embedding["conv_out"](controlnet_cond)
 
-        sample = self.conv_in(sample)
+        hidden_state = self.conv_in(hidden_state)
 
-        sample = sample + controlnet_cond
+        hidden_state = hidden_state + controlnet_cond
 
-        down_block_res_sample = conditioning_scale * self.controlnet_down_blocks[0](sample)
+        down_block_res_sample = self.controlnet_down_blocks[0](hidden_state)
         down_block_res_samples = [down_block_res_sample]
 
         for down_block in self.down_blocks:
             for i, resnet in enumerate(down_block["resnets"]):
-                sample = resnet(sample, timesteps)
+                hidden_state = resnet(hidden_state, t)
 
                 if "attentions" in down_block:
-                    sample = down_block["attentions"][i](sample, encoder_hidden_states)
+                    hidden_state = down_block["attentions"][i](hidden_state, encoder_hidden_states)
 
-                down_block_res_sample = conditioning_scale * self.controlnet_down_blocks[len(down_block_res_samples)](sample)
+                down_block_res_sample = self.controlnet_down_blocks[len(down_block_res_samples)](hidden_state)
                 down_block_res_samples.append(down_block_res_sample)
 
             if "downsamplers" in down_block:
-                sample = down_block["downsamplers"][0]["conv"](sample)
+                hidden_state = down_block["downsamplers"][0]["conv"](hidden_state)
 
-                down_block_res_sample = conditioning_scale * self.controlnet_down_blocks[len(down_block_res_samples)](sample)
+                down_block_res_sample = self.controlnet_down_blocks[len(down_block_res_samples)](hidden_state)
                 down_block_res_samples.append(down_block_res_sample)
 
-        sample = self.mid_block["resnets"][0](sample, timesteps)
-        sample = self.mid_block["attentions"][0](sample, encoder_hidden_states)
-        sample = self.mid_block["resnets"][1](sample, timesteps)
+        hidden_state = self.mid_block["resnets"][0](hidden_state, t)
+        hidden_state = self.mid_block["attentions"][0](hidden_state, encoder_hidden_states)
+        hidden_state = self.mid_block["resnets"][1](hidden_state, t)
 
-        mid_block_res_sample = conditioning_scale * self.controlnet_mid_block(sample)
+        mid_block_res_sample = self.controlnet_mid_block(hidden_state)
 
-        down_block_res_samples = tuple(down_block_res_samples)
-
-        if not return_dict:
-            return (down_block_res_samples, mid_block_res_sample, None, None)
-
-        return ControlNetOutput(
+        return dict(
             down_block_res_samples=down_block_res_samples,
             mid_block_res_sample=mid_block_res_sample,
-            add_to_down_block_inputs=None,
-            add_to_output=None,
         )
 
     @classmethod

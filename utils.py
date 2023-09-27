@@ -12,6 +12,7 @@ import xformers
 from PIL import Image
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+from transformers import CLIPTokenizerFast
 
 
 def zero_module(module):
@@ -223,6 +224,58 @@ class GEGLU(nn.Module):
     def forward(self, hidden_states):
         hidden_states, gate = self.proj(hidden_states).chunk(2, dim=-1)
         return hidden_states * F.gelu(gate)
+
+
+# TODO: would be nice to just call a function from a tokenizers https://github.com/huggingface/tokenizers
+# i.e. afaik tokenizing shouldn't require holding any state
+
+tokenizer_one = CLIPTokenizerFast.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer")
+
+tokenizer_two = CLIPTokenizerFast.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2")
+
+
+def sdxl_tokenize_one(prompts):
+    return tokenizer_one(
+        prompts,
+        padding="max_length",
+        max_length=tokenizer_one.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
+
+
+def sdxl_tokenize_two(prompts):
+    return tokenizer_two(
+        prompts,
+        padding="max_length",
+        max_length=tokenizer_one.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
+
+
+def sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two):
+    prompt_embeds_1 = text_encoder_one(
+        text_input_ids_one,
+        output_hidden_states=True,
+    ).hidden_states[-2]
+
+    prompt_embeds_1 = prompt_embeds_1.view(prompt_embeds_1.shape[0], prompt_embeds_1.shape[1], -1)
+
+    prompt_embeds_2 = text_encoder_two(
+        text_input_ids_two,
+        output_hidden_states=True,
+    )
+
+    pooled_encoder_hidden_states = prompt_embeds_2[0]
+
+    prompt_embeds_2 = prompt_embeds_2.hidden_states[-2]
+
+    prompt_embeds_2 = prompt_embeds_2.view(prompt_embeds_2.shape[0], prompt_embeds_2.shape[1], -1)
+
+    encoder_hidden_states = torch.cat((prompt_embeds_1, prompt_embeds_2), dim=-1)
+
+    return encoder_hidden_states, pooled_encoder_hidden_states
 
 
 # General instructions: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/python
