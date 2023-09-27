@@ -145,9 +145,6 @@ def init_sdxl():
 
 
 def get_sdxl_dataset():
-    if training_config.dummy_dataset:
-        return get_sdxl_dummy_dataset()
-
     dataset = (
         wds.WebDataset(
             training_config.train_shards,
