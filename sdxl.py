@@ -2,6 +2,7 @@ import os
 import random
 from typing import Union
 
+import numpy as np
 import safetensors.torch
 import torch
 import torch.nn.functional as F
@@ -9,9 +10,9 @@ import torchvision.transforms
 import torchvision.transforms.functional as TF
 import wandb
 import webdataset as wds
+from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
-from torchvision import transforms
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 from diffusion import (default_num_train_timesteps, make_sigmas,
@@ -20,7 +21,8 @@ from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
 from training_config import training_config
-from utils import (get_random_crop_params, get_sdxl_conditioning_images,
+from utils import (get_random_crop_params, make_outpainting_mask,
+                   make_random_irregular_mask, make_random_rectangle_mask,
                    maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
                    sdxl_tokenize_one, sdxl_tokenize_two)
 
@@ -163,7 +165,7 @@ def get_sdxl_dataset():
     )
 
     if training_config.training in ["sdxl_controlnet", "sdxl_adapter"]:
-        dataset = dataset.select(conditioning_image_present)
+        dataset = dataset.select(conditioning_image_is_not_none)
 
     dataset = dataset.batched(training_config.batch_size, partial=False, collation_fn=default_collate)
 
@@ -223,25 +225,19 @@ def make_sample(d):
         "image": TF.normalize(TF.to_tensor(image), [0.5], [0.5]),
     }
 
-    conditioning_image, conditioning_image_mask = get_sdxl_conditioning_images(
-        image,
-        conditioning_type=training_config.training,
-        adapter_type=training_config.adapter_type,
-        controlnet_type=training_config.controlnet_type,
-        controlnet_variant=training_config.controlnet_variant,
-    )
+    if training_config.training in ["sdxl_adapter", "sdxl_controlnet"]:
+        conditioning_images = get_sdxl_conditioning_images(image)
 
-    if conditioning_image is not None:
-        sample["conditioning_image"] = conditioning_image
+        sample["conditioning_image"] = conditioning_images["conditioning_image"]
 
-    if conditioning_image_mask is not None:
-        sample["conditioning_image_mask"] = conditioning_image_mask
+        if conditioning_images["conditioning_image_mask"] is not None:
+            sample["conditioning_image_mask"] = conditioning_images["conditioning_image_mask"]
 
     return sample
 
 
-def conditioning_image_present(sample):
-    return "conditioning_image" in sample and sample["conditioning_image"] is not None
+def conditioning_image_is_not_none(sample):
+    return sample["conditioning_image"] is not None
 
 
 def sdxl_train_step(batch):
@@ -251,8 +247,7 @@ def sdxl_train_step(batch):
         micro_conditioning = batch["micro_conditioning"].to(device=device_id)
 
         image = batch["image"].to(device_id, dtype=vae.dtype)
-        latents = vae.encode(image).latent_dist.sample().to(dtype=unet_dtype)
-        latents = latents * vae.config.scaling_factor
+        latents = vae.encode(image).to(dtype=unet_dtype)
 
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
@@ -281,23 +276,14 @@ def sdxl_train_step(batch):
 
         scaled_noisy_latents = noisy_latents / ((sigmas_**2 + 1) ** 0.5)
 
-        if training_config.training == "sdxl_controlnet":
-            if training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-                controlnet_dtype = maybe_ddp_dtype(controlnet)
+        if "conditioning_image" in batch:
+            conditioning_image = batch["conditioning_image"].to(device_id)
 
-                controlnet_image = batch["conditioning_image"].to(device_id, dtype=vae.dtype)
-                controlnet_image = vae.encode(controlnet_image).to(dtype=controlnet_dtype)
-
-                _, _, controlnet_image_height, controlnet_image_width = controlnet_image.shape
-                controlnet_image_mask = batch["conditioning_image_mask"].to(device=device_id)
-                controlnet_image_mask = TF.resize(controlnet_image_mask, (controlnet_image_height, controlnet_image_width)).to(dtype=controlnet_dtype)
-
-                controlnet_image = torch.concat((controlnet_image, controlnet_image_mask), dim=1)
-            else:
-                controlnet_image = batch["controlnet_image"].to(device_id)
-
-        if training_config.training == "sdxl_adapter":
-            adapter_image = batch["conditioning_image"].to(device_id)
+        if training_config.training == "sdxl_controlnet" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+            controlnet_dtype = maybe_ddp_dtype(controlnet)
+            conditioning_image = vae.encode(conditioning_image.to(vae.dtype)).to(dtype=controlnet_dtype)
+            conditioning_image_mask = TF.resize(batch["conditioning_image_mask"], conditioning_image.shape[2:]).to(device=device_id, dtype=controlnet_dtype)
+            conditioning_image = torch.concat((conditioning_image, conditioning_image_mask), dim=1)
 
     with torch.autocast(
         "cuda",
@@ -310,7 +296,7 @@ def sdxl_train_step(batch):
         add_to_output = None
 
         if training_config.training == "sdxl_adapter":
-            down_block_additional_residuals = adapter(adapter_image)
+            down_block_additional_residuals = adapter(conditioning_image)
 
         if training_config.training == "sdxl_controlnet":
             controlnet_out = controlnet(
@@ -319,7 +305,7 @@ def sdxl_train_step(batch):
                 encoder_hidden_states=encoder_hidden_states,
                 micro_conditioning=micro_conditioning,
                 pooled_encoder_hidden_states=pooled_encoder_hidden_states,
-                controlnet_cond=controlnet_image,
+                controlnet_cond=conditioning_image,
             )
 
             down_block_additional_residuals = controlnet_out["down_block_res_samples"]
@@ -373,17 +359,21 @@ def sdxl_log_validation(step):
         wandb_validation_images = []
 
         for validation_image_path in training_config.validation_images:
-            validation_image, _ = get_sdxl_conditioning_images(
-                validation_image_path,
-                conditioning_type=training_config.training,
-                adapter_type=training_config.adapter_type,
-                controlnet_type=training_config.controlnet_type,
-                controlnet_variant=training_config.controlnet_variant,
-                vae=vae,
-            )
+            validation_image = Image.open(validation_image_path)
+            validation_image = validation_image.convert("RGB")
+            validation_image = validation_image.resize((training_config.resolution, training_config.resolution))
 
-            formatted_validation_images.append(validation_image)
-            wandb_validation_images.append(wandb.Image(log_validation_image)) # TODO - need a printable image
+            conditioning_images = get_sdxl_conditioning_images(validation_image)
+
+            conditioning_image = conditioning_images["conditioning_image"]
+
+            if training_config.training == "sdxl_controlnet" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+                conditioning_image = vae.encode(conditioning_image[None, :, :, :].to(vae.device, dtype=vae.dtype))
+                conditionin_mask_image = TF.resize(conditioning_images["conditioning_mask_image"], conditioning_image.shape[2:]).to(conditioning_image.dtype, conditioning_image.device)
+                conditioning_image = torch.concat(conditioning_image, conditionin_mask_image, dim=1)
+
+            formatted_validation_images.append(conditioning_image)
+            wandb_validation_images.append(wandb.Image(conditioning_images["conditioning_image_as_pil"]))
 
         if training_config.controlnet_type == "inpainting" or not _validation_images_logged:
             wandb.log({"validation_conditioning": wandb_validation_images}, step=step)
@@ -421,3 +411,67 @@ def sdxl_log_validation(step):
 
     if controlnet_ is not None:
         controlnet_.train()
+
+
+if training_config.training == "sdxl_adapter" and training_config.adapter_type == "openpose":
+    from controlnet_aux import OpenposeDetector
+
+    open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+
+
+def get_sdxl_conditioning_images(image):
+    resolution = image.width
+
+    if training_config.training == "sdxl_adapter" and training_config.adapter_type == "openpose":
+        conditioning_image = open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
+
+        if (conditioning_image == 0).all():
+            return None, None
+
+        conditioning_image_as_pil = Image.fromarray(conditioning_image)
+
+        conditioning_image = TF.to_tensor(conditioning_image)
+
+    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "canny":
+        import cv2
+
+        conditioning_image = np.array(image)
+        conditioning_image = cv2.Canny(conditioning_image, 100, 200)
+        conditioning_image = conditioning_image[:, :, None]
+        conditioning_image = np.concatenate([conditioning_image, conditioning_image, conditioning_image], axis=2)
+
+        conditioning_image_as_pil = Image.fromarray(conditioning_image)
+
+        conditioning_image = TF.to_tensor(conditioning_image)
+
+    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+        if random.random() <= 0.25:
+            conditioning_image_mask = np.ones((resolution, resolution), np.float32)
+        else:
+            conditioning_image_mask = random.choice([make_random_rectangle_mask, make_random_irregular_mask, make_outpainting_mask])(resolution, resolution)
+
+        conditioning_image_mask = torch.from_numpy(conditioning_image_mask)
+
+        conditioning_image_mask = conditioning_image_mask[None, :, :]
+
+        conditioning_image = TF.to_tensor(image)
+
+        if training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+            # where mask is 1, zero out the pixels. Note that this requires mask to be concattenated
+            # with the mask so that the network knows the zeroed out pixels are from the mask and
+            # are not just zero in the original image
+            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5)
+
+            conditioning_image_as_pil = TF.to_pil_image(conditioning_image)
+
+            conditioning_image = TF.normalize(conditioning_image, [0.5], [0.5])
+        else:
+            # Just zero out the pixels which will be masked
+            conditioning_image_as_pil = TF.to_pil_image(conditioning_image * (conditioning_image_mask < 0.5))
+
+            # where mask is set to 1, set to -1 "special" masked image pixel.
+            # -1 is outside of the 0-1 range that the controlnet normalized
+            # input is in.
+            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask > 0.5)
+
+    return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
