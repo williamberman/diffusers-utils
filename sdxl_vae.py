@@ -101,7 +101,24 @@ class SDXLVae(nn.Module, ModelUtils):
         # fmt: on
 
     def encode(self, x, generator=None):
-        h = self.encoder(x)
+        h = x
+
+        h = self.encoder["conv_in"](h)
+
+        for down_block in self.encoder["down_blocks"]:
+            for resnet in down_block["resnets"]:
+                h = resnet(h)
+
+            if "downsamplers" in down_block:
+                h = down_block["downsamplers"][0]["conv"](h)
+
+        h = self.encoder["mid_block"]["resnets"][0](h)
+        h = self.encoder["mid_block"]["attentions"][0](h)
+        h = self.encoder["mid_block"]["resnets"][1](h)
+
+        h = self.encoder["conv_norm_out"](h)
+        h = self.encoder["conv_act"](h)
+        h = self.encoder["conv_out"](h)
 
         mean, logvar = self.quant_conv(h).chunk(2, dim=1)
 
@@ -118,9 +135,20 @@ class SDXLVae(nn.Module, ModelUtils):
     def decode(self, z):
         z = z / scaling_factor
 
-        z = self.post_quant_conv(z)
+        h = z
 
-        x_pred = self.decoder(z)
+        h = self.post_quant_conv(h)
+
+        h = self.decoder["mid_block"]["resnets"][0](h)
+        h = self.decoder["mid_block"]["attentions"][0](h)
+        h = self.decoder["mid_block"]["resnets"][1](h)
+
+        for up_block in self.encoder["up_blocks"]:
+            for resnet in up_block["resnets"]:
+                h = resnet(h)
+
+            if "upsamplers" in up_block:
+                h = up_block["upsamplers"][0]["conv"](h)
 
         x_pred = ((x_pred * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8).permute(0, 2, 3, 1)
 
