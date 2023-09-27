@@ -21,7 +21,7 @@ class Config:
     train_shards: str
 
     # `training_config.training == "sdxl_adapter"` specific config
-    adapter_type: Optional[Literal["mediapipe_pose", "openpose"]] = None
+    adapter_type: Optional[Literal["openpose"]] = None
 
     # TODO: bad naming
     # `training_config.training == "sdxl_controlnet"` specific config

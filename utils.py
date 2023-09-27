@@ -1,7 +1,7 @@
 import math
 import os
 import random
-from typing import Literal
+from typing import Literal, Tuple
 
 import numpy as np
 import safetensors.torch
@@ -278,82 +278,66 @@ def sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_on
     return encoder_hidden_states, pooled_encoder_hidden_states
 
 
-# General instructions: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/python
-#
-# Available models: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker/index#models
-#
-# requires downloading model to root of repo i.e.
-# `wget https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task -O pose_landmarker.task`
+def get_sdxl_conditioning_images(
+    image,
+    conditioning_type: Literal["sdxl_adapter", "sdxl_controlnet", "sdxl_unet"],
+    adapter_type: Literal["openpose"],
+    controlnet_type: Literal["canny", "inpainting"],
+    controlnet_variant: Literal["pre_encoded_controlnet_cond"],
+    resolution=1024,
+    vae=None,
+):
+    if conditioning_type == "sdxl_unet":
+        return None, None
 
-mediapipe_pose_detector = None
-_init_mediapipe_pose_called = False
+    if isinstance(image, str):
+        image = Image.open(image)
+        image = image.convert("RGB")
+        image = image.resize((resolution, resolution))
 
+    if conditioning_type == "sdxl_adapter":
+        if adapter_type == "openpose":
+            return openpose_adapter_image(image), None
+        else:
+            assert False
 
-def init_mediapipe_pose():
-    from mediapipe.tasks import python
-    from mediapipe.tasks.python import vision
+    elif conditioning_type == "sdxl_controlnet":
+        if controlnet_type == "canny":
+            return make_canny_conditioning(image), None
+        elif controlnet_type == "inpainting":
+            controlnet_image_mask = make_mask(image.height, image.width)
 
-    global _init_mediapipe_pose_called, mediapipe_pose_detector
+            if controlnet_variant == "pre_encoded_controlnet_cond":
+                image = make_masked_image(image, return_type="vae_scaled_tensor", mask=controlnet_image_mask)
 
-    if _init_mediapipe_pose_called:
-        return
+                image = image[None, :, :, :]
 
-    _init_mediapipe_pose_called = True
+                if vae is None:
+                    return image, controlnet_image_mask
 
-    base_options = python.BaseOptions(model_asset_path="pose_landmarker.task")
-    options = vision.PoseLandmarkerOptions(base_options=base_options, output_segmentation_masks=False)
-    mediapipe_pose_detector = vision.PoseLandmarker.create_from_options(options)
+                image = image.to(vae.device, dtype=vae.dtype)
 
+                image = vae.encode(image)
 
-def mediapipe_pose_adapter_image(image, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
-    import mediapipe as mp
+                _, _, controlnet_image_height, controlnet_image_width = image.shape
 
-    init_mediapipe_pose()
+                controlnet_image_mask = TF.resize(torch.from_numpy(controlnet_image_mask)[None, None, :, :], (controlnet_image_height, controlnet_image_width)).to(
+                    device=image.device, dtype=image.dtype
+                )
 
-    numpy_image = np.array(image)
+                image = torch.concat((image, controlnet_image_mask), dim=1)
 
-    height, width = numpy_image.shape[:2]
+                return image, None
+            else:
+                image = make_masked_image(image, return_type="controlnet_scaled_tensor", mask=controlnet_image_mask)
 
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=numpy_image)
+                image = image[None, :, :, :]
 
-    detection_result = mediapipe_pose_detector.detect(mp_image)
-
-    pose_landmarks = detection_result.pose_landmarks
-
-    if len(pose_landmarks) == 0:
-        return None
-
-    pose = np.zeros((height, width, 3), dtype=np.uint8)
-    draw_landmarks_on_image(pose, pose_landmarks)
-
-    if return_type == "vae_scaled_tensor":
-        pose = torch.tensor(pose)
-        pose = pose.permute(2, 0, 1)
-        pose = pose.float()
-        pose = pose / 255.0
-    elif return_type == "pil":
-        pose = Image.fromarray(pose)
+                return image, None
+        else:
+            assert False
     else:
         assert False
-
-    return pose
-
-
-def draw_landmarks_on_image(pose, pose_landmarks):
-    from mediapipe import solutions
-    from mediapipe.framework.formats import landmark_pb2
-
-    for idx in range(len(pose_landmarks)):
-        pose_landmarks = pose_landmarks[idx]
-
-        pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        pose_landmarks_proto.landmark.extend([landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in pose_landmarks])
-        solutions.drawing_utils.draw_landmarks(
-            pose,
-            pose_landmarks_proto,
-            solutions.pose.POSE_CONNECTIONS,
-            solutions.drawing_styles.get_default_pose_landmarks_style(),
-        )
 
 
 # NOTE that this pil image cannot be used with the actual
@@ -370,10 +354,7 @@ def masked_image_as_pil(image: torch.Tensor) -> Image.Image:
     return image
 
 
-def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor", "vae_scaled_tensor"] = "controlnet_scaled_tensor", mask=None):
-    if mask is None:
-        mask = make_mask(image.height, image.width)
-
+def make_masked_image(image, mask, return_type: Literal["controlnet_scaled_tensor", "vae_scaled_tensor"] = "controlnet_scaled_tensor"):
     mask = torch.from_numpy(mask)
     mask = mask[None, :, :]
 
@@ -395,7 +376,7 @@ def make_masked_image(image, return_type: Literal["controlnet_scaled_tensor", "v
     else:
         assert False
 
-    return image, mask
+    return image
 
 
 masking_types = ["full", "rectangle", "irregular", "outpainting"]
@@ -546,8 +527,13 @@ def init_openpose():
     open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
 
 
-def openpose_adapter_image(image, resolution, return_type: Literal["vae_scaled_tensor", "pil"] = "vae_scaled_tensor"):
+def openpose_adapter_image(image):
     init_openpose()
+
+    if image.height > image.width:
+        resolution = image.height
+    else:
+        resolution = image.width
 
     pose = open_pose(
         image,
@@ -560,23 +546,15 @@ def openpose_adapter_image(image, resolution, return_type: Literal["vae_scaled_t
     if (pose == 0).all():
         return None
 
-    if return_type == "vae_scaled_tensor":
-        pose = torch.tensor(pose)
-        pose = pose.permute(2, 0, 1)
-        pose = pose.float()
-        pose = pose / 255.0
-    elif return_type == "pil":
-        pose = Image.fromarray(pose)
-    else:
-        assert False
+    pose = torch.tensor(pose)
+    pose = pose.permute(2, 0, 1)
+    pose = pose.float()
+    pose = pose / 255.0
 
     return pose
 
 
-def make_canny_conditioning(
-    image,
-    return_type: Literal["controlnet_scaled_tensor", "pil"] = "controlnet_scaled_tensor",
-):
+def make_canny_conditioning(image):
     import cv2
 
     controlnet_image = np.array(image)
@@ -584,11 +562,23 @@ def make_canny_conditioning(
     controlnet_image = controlnet_image[:, :, None]
     controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
 
-    if return_type == "controlnet_scaled_tensor":
-        controlnet_image = TF.to_tensor(controlnet_image)
-    elif return_type == "pil":
-        controlnet_image = Image.fromarray(controlnet_image)
-    else:
-        assert False
+    controlnet_image = TF.to_tensor(controlnet_image)
 
     return controlnet_image
+
+
+def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, int]) -> Tuple[int, int, int, int]:
+    h, w = input_size
+
+    th, tw = output_size
+
+    if h < th or w < tw:
+        raise ValueError(f"Required crop size {(th, tw)} is larger than input image size {(h, w)}")
+
+    if w == tw and h == th:
+        return 0, 0, h, w
+
+    i = torch.randint(0, h - th + 1, size=(1,)).item()
+    j = torch.randint(0, w - tw + 1, size=(1,)).item()
+
+    return i, j, th, tw
