@@ -1,16 +1,12 @@
-from dataclasses import dataclass
-from typing import Optional, Tuple
-
 import torch
 import torch.nn.functional as F
-from diffusers import ControlNetModel
 from torch import nn
 
 from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
                    get_sinusoidal_embedding, maybe_ddp_module, zero_module)
 
 
-class SDXLControlNet(ControlNetModel, ModelUtils):
+class SDXLControlNet(nn.Module, ModelUtils):
     def __init__(self):
         super().__init__()
 
@@ -207,11 +203,3 @@ class SDXLControlNet(ControlNetModel, ModelUtils):
         controlnet.mid_block.load_state_dict(unet.mid_block.state_dict())
 
         return controlnet
-
-    # methods to mimic diffusers
-
-    def save_pretrained(self, *args, **kwargs):
-        diffusers_controlnet = ControlNetModel.from_pretrained("diffusers/controlnet-canny-sdxl-1.0")
-        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
-        diffusers_controlnet.load_state_dict(sd)
-        diffusers_controlnet.save_pretrained(*args, **kwargs)

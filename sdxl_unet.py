@@ -1,16 +1,14 @@
-from dataclasses import dataclass
 from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
-from diffusers import UNet2DConditionModel
 from torch import nn
 
 from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
                    get_sinusoidal_embedding)
 
 
-class SDXLUNet(UNet2DConditionModel, ModelUtils):
+class SDXLUNet(nn.Module, ModelUtils):
     def __init__(self):
         super().__init__()
 
@@ -232,22 +230,3 @@ class SDXLUNet(UNet2DConditionModel, ModelUtils):
     @classmethod
     def load_fp16(cls, device=None):
         return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device)
-
-    # methods to mimic diffusers
-
-    @property
-    def config(self):
-        @dataclass
-        class SDXLUnetConfig:
-            addition_time_embed_dim: int = 256
-            in_channels: int = 4
-
-        config = SDXLUnetConfig()
-
-        return config
-
-    def save_pretrained(self, *args, **kwargs):
-        diffusers_unet = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet")
-        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
-        diffusers_unet.load_state_dict(sd)
-        diffusers_unet.save_pretrained(*args, **kwargs)

@@ -5,12 +5,10 @@ from typing import Union
 import numpy as np
 import safetensors.torch
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 import wandb
 import webdataset as wds
-from diffusers import T2IAdapter
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
@@ -19,6 +17,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 from diffusion import (default_num_train_timesteps, make_sigmas,
                        sdxl_diffusion_loop)
+from sdxl_adapter import SDXLAdapter
 from sdxl_controlnet import SDXLControlNet
 from sdxl_controlnet_full import SDXLControlNetFull
 from sdxl_controlnet_pre_encoded_controlnet_cond import \
@@ -43,7 +42,7 @@ unet: SDXLUNet = None
 
 sigmas: torch.Tensor = None
 
-adapter: T2IAdapter = None
+adapter: SDXLAdapter = None
 
 controlnet: Union[SDXLControlNet, SDXLControlNetFull]
 
@@ -116,21 +115,14 @@ def init_sdxl():
 
     if training_config.training == "sdxl_adapter":
         if training_config.resume_from is None:
-            adapter = T2IAdapter(
-                in_channels=3,
-                channels=(320, 640, 1280, 1280),
-                num_res_blocks=2,
-                downscale_factor=16,
-                adapter_type="full_adapter_xl",
-            )
+            adapter = SDXLAdapter()
         else:
             adapter_repo = os.path.join(training_config.resume_from, "adapter")
-            adapter = T2IAdapter.from_pretrained(adapter_repo)
+            adapter = SDXLAdapter.load(adapter_repo)
 
         adapter.to(device=device_id)
         adapter.train()
         adapter.requires_grad_(True)
-        adapter.enable_xformers_memory_efficient_attention()
         adapter = DDP(adapter, device_ids=[device_id])
 
     if training_config.training == "sdxl_controlnet":

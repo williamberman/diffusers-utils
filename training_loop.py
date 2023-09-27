@@ -105,11 +105,11 @@ def main():
 
     if dist.get_rank() == 0:
         if training_config.training == "sdxl_unet":
-            unet.module.save_pretrained(training_config.output_dir)
+            safetensors.torch.save_file(unet.module.state_dict(), os.path.join(training_config.output_dir, "unet.safetensors"))
         elif training_config.training == "sdxl_adapter":
-            adapter.module.save_pretrained(training_config.output_dir)
+            safetensors.torch.save_file(adapter.module.state_dict(), os.path.join(training_config.output_dir, "adapter.safetensors"))
         elif training_config.training == "sdxl_controlnet":
-            controlnet.module.save_pretrained(training_config.output_dir)
+            safetensors.torch.save_file(controlnet.module.state_dict(), os.path.join(training_config.output_dir, "controlnet.safetensors"))
         else:
             assert False
 
@@ -247,20 +247,14 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
         save_path = os.path.join(save_path, "adapter")
 
-        adapter.module.save_pretrained(save_path)
+        safetensors.torch.save_file(adapter.module.state_dict(), os.path.join(training_config.output_dir, "adapter.safetensors"))
     elif training_config.training == "sdxl_controlnet":
         from sdxl import controlnet, unet
 
-        controlnet_save_path = os.path.join(save_path, "controlnet")
-
-        controlnet.module.save_pretrained(controlnet_save_path)
+        safetensors.torch.save_file(controlnet.module.state_dict(), os.path.join(training_config.output_dir, "controlnet.safetensors"))
 
         if training_config.controlnet_train_base_unet:
-            unet_state_dict = {k: v.to("cpu") for k, v in maybe_ddp_module(unet).up_blocks.state_dict().items()}
-
-            unet_save_path = os.path.join(save_path, "unet.safetensors")
-
-            safetensors.torch.save_file(unet_state_dict, unet_save_path)
+            safetensors.torch.save_file(unet.module.up_blocks.state_dict(), unet_save_path=os.path.join(save_path, "unet.safetensors"))
     else:
         assert False
 

@@ -3,7 +3,6 @@ import os
 import safetensors.torch
 import torch
 import torch.nn.functional as F
-from diffusers import ControlNetModel
 from torch import nn
 
 from sdxl_controlnet import ControlNetOutput
@@ -11,7 +10,7 @@ from utils import (ModelUtils, ResnetBlock2D, Transformer2DModel,
                    get_sinusoidal_embedding, maybe_ddp_module, zero_module)
 
 
-class SDXLControlNetFull(ControlNetModel, ModelUtils):
+class SDXLControlNetFull(nn.Module, ModelUtils):
     def __init__(self):
         super().__init__()
 
@@ -306,11 +305,3 @@ class SDXLControlNetFull(ControlNetModel, ModelUtils):
         controlnet.conv_out.load_state_dict(unet.conv_out.state_dict())
 
         return controlnet
-
-    # methods to mimic diffusers
-
-    def save_pretrained(self, save_path):
-        os.makedirs(save_path, exist_ok=True)
-        save_path = os.path.join(save_path, "diffusion_pytorch_model.safetensors")
-        sd = {k: v.to("cpu") for k, v in self.state_dict().items()}
-        safetensors.torch.save_file(sd, save_path)
