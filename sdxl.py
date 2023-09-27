@@ -24,8 +24,6 @@ from training_config import training_config
 from utils import (maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
                    sdxl_tokenize_one, sdxl_tokenize_two)
 
-repo = "stabilityai/stable-diffusion-xl-base-1.0"
-
 device_id = int(os.environ["LOCAL_RANK"])
 
 vae: SDXLVae = None
@@ -53,12 +51,12 @@ def init_sdxl():
 
     _init_sdxl_called = True
 
-    text_encoder_one = CLIPTextModel.from_pretrained(repo, subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
     text_encoder_one.to(device=device_id)
     text_encoder_one.requires_grad_(False)
     text_encoder_one.eval()
 
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(repo, subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
     text_encoder_two.to(device=device_id)
     text_encoder_two.requires_grad_(False)
     text_encoder_two.eval()
@@ -175,34 +173,6 @@ def get_sdxl_dataset():
     return dataset
 
 
-def get_sdxl_dummy_dataset():
-    image = Image.open("./validation_data/two_birds_on_branch.png").convert("RGB")
-
-    metadata = {"original_height": image.height, "original_width": image.width}
-
-    text = "two birds on a branch"
-
-    sample = {
-        "image": image,
-        "metadata": metadata,
-        "text": text,
-    }
-
-    from torch.utils.data.dataset import IterableDataset
-
-    class Dataset(IterableDataset):
-        def __iter__(self):
-            while True:
-                batch = []
-
-                for _ in range(training_config.batch_size):
-                    batch.append(make_sample(sample))
-
-                yield default_collate(batch)
-
-    return Dataset()
-
-
 @torch.no_grad()
 def make_sample(d):
     image = d["image"]
@@ -279,6 +249,8 @@ def make_sample(d):
 
     if training_config.training == "sdxl_controlnet":
         if training_config.controlnet_type == "canny":
+            from utils import make_canny_conditioning
+
             controlnet_image = make_canny_conditioning(resized_and_cropped_image, return_type="controlnet_scaled_tensor")
 
             sample["controlnet_image"] = controlnet_image
@@ -304,11 +276,11 @@ def adapter_image_is_not_none(sample):
     return sample["adapter_image"] is not None
 
 
-def sdxl_train_step(batch, global_step):
+def sdxl_train_step(batch):
     with torch.no_grad():
         unet_dtype = maybe_ddp_dtype(unet)
 
-        time_ids = batch["time_ids"].to(device=device_id)
+        micro_conditioning = batch["micro_conditioning"].to(device=device_id)
 
         image = batch["image"].to(device_id, dtype=vae.dtype)
         latents = vae.encode(image).latent_dist.sample().to(dtype=unet_dtype)
@@ -317,10 +289,10 @@ def sdxl_train_step(batch, global_step):
         text_input_ids_one = batch["text_input_ids_one"].to(device_id)
         text_input_ids_two = batch["text_input_ids_two"].to(device_id)
 
-        prompt_embeds, pooled_prompt_embeds_two = sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two)
+        encoder_hidden_states, pooled_encoder_hidden_states = sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two)
 
-        prompt_embeds = prompt_embeds.to(dtype=unet_dtype)
-        pooled_prompt_embeds_two = pooled_prompt_embeds_two.to(dtype=unet_dtype)
+        encoder_hidden_states = encoder_hidden_states.to(dtype=unet_dtype)
+        pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(dtype=unet_dtype)
 
         bsz = latents.shape[0]
 
@@ -346,8 +318,7 @@ def sdxl_train_step(batch, global_step):
                 controlnet_dtype = maybe_ddp_dtype(controlnet)
 
                 controlnet_image = batch["controlnet_image"].to(device_id, dtype=vae.dtype)
-                controlnet_image = vae.encode(controlnet_image).latent_dist.sample().to(dtype=controlnet_dtype)
-                controlnet_image = controlnet_image * vae.config.scaling_factor
+                controlnet_image = vae.encode(controlnet_image).to(dtype=controlnet_dtype)
 
                 _, _, controlnet_image_height, controlnet_image_width = controlnet_image.shape
                 controlnet_image_mask = batch["controlnet_image_mask"].to(device=device_id)
@@ -373,29 +344,27 @@ def sdxl_train_step(batch, global_step):
         if training_config.training == "sdxl_adapter":
             down_block_additional_residuals = adapter(adapter_image)
 
-            down_block_additional_residuals = [x * training_config.adapter_conditioning_scale for x in down_block_additional_residuals]
-
         if training_config.training == "sdxl_controlnet":
-            down_block_additional_residuals, mid_block_additional_residual, add_to_down_block_inputs, add_to_output = controlnet(
-                scaled_noisy_latents,
-                timesteps,
-                encoder_hidden_states=prompt_embeds,
-                added_cond_kwargs={
-                    "time_ids": time_ids,
-                    "text_embeds": pooled_prompt_embeds_two,
-                },
+            controlnet_out = controlnet(
+                x_t=scaled_noisy_latents,
+                t=timesteps,
+                encoder_hidden_states=encoder_hidden_states,
+                micro_conditioning=micro_conditioning,
+                pooled_encoder_hidden_states=pooled_encoder_hidden_states,
                 controlnet_cond=controlnet_image,
-                return_dict=False,
             )
 
+            down_block_additional_residuals = controlnet_out["down_block_res_samples"]
+            mid_block_additional_residual = controlnet_out["mid_block_res_sample"]
+            add_to_down_block_inputs = controlnet_out.get("add_to_down_block_inputs", None)
+            add_to_output = controlnet_out.get("add_to_output", None)
+
         model_pred = unet(
-            scaled_noisy_latents,
-            timesteps,
-            encoder_hidden_states=prompt_embeds,
-            added_cond_kwargs={
-                "time_ids": time_ids,
-                "text_embeds": pooled_prompt_embeds_two,
-            },
+            x_t=scaled_noisy_latents,
+            t=timesteps,
+            encoder_hidden_states=encoder_hidden_states,
+            micro_conditioning=micro_conditioning,
+            pooled_encoder_hidden_states=pooled_encoder_hidden_states,
             down_block_additional_residuals=down_block_additional_residuals,
             mid_block_additional_residual=mid_block_additional_residual,
             add_to_down_block_inputs=add_to_down_block_inputs,

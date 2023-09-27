@@ -22,8 +22,6 @@ class Config:
 
     # `training_config.training == "sdxl_adapter"` specific config
     adapter_type: Optional[Literal["mediapipe_pose", "openpose"]] = None
-    adapter_conditioning_scale: float = 1.0
-    adapter_conditioning_factor: float = 1.0
 
     # TODO: bad naming
     # `training_config.training == "sdxl_controlnet"` specific config
