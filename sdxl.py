@@ -17,13 +17,9 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 from diffusion import (default_num_train_timesteps, make_sigmas,
                        sdxl_diffusion_loop)
-from sdxl_adapter import SDXLAdapter
-from sdxl_controlnet import SDXLControlNet
-from sdxl_controlnet_full import SDXLControlNetFull
-from sdxl_controlnet_pre_encoded_controlnet_cond import \
-    SDXLControlNetPreEncodedControlnetCond
-from sdxl_unet import SDXLUNet
-from sdxl_vae import SDXLVae
+from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
+                         SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
+                         SDXLVae)
 from training_config import training_config
 from utils import (maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
                    sdxl_tokenize_one, sdxl_tokenize_two)
