@@ -1,6 +1,7 @@
 import itertools
 import os
 import random
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
@@ -22,7 +23,22 @@ from diffusion import (default_num_train_timesteps, make_sigmas,
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
-from training_config import Config
+
+
+@dataclass
+class Config:
+    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
+
+    # `training_config.training == "sdxl_adapter"` specific config
+    adapter_type: Optional[Literal["openpose"]] = None
+
+    # TODO: bad naming
+    # `training_config.training == "sdxl_controlnet"` specific config
+    controlnet_type: Optional[Literal["canny", "inpainting"]] = None
+    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"] = "default"
+    controlnet_train_base_unet: bool = False
+
+    mixed_precision: Optional[torch.dtype] = None
 
 
 class SDXLTraining:

@@ -1,12 +1,16 @@
+import dataclasses
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from logging import getLogger
+from typing import Dict, List, Literal, Optional
 
 import safetensors.torch
 import torch
 import torch.distributed as dist
 import wandb
+import yaml
 from bitsandbytes.optim import AdamW8bit
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn.utils import clip_grad_norm_
@@ -15,7 +19,9 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
-from training_config import load_training_config, training_config
+
+DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
+DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE = "DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE"
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -31,7 +37,63 @@ logging.basicConfig(
 device = int(os.environ["LOCAL_RANK"])
 
 
-def main():
+@dataclass
+class Config:
+    # required config
+    output_dir: str
+    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
+    train_shards: str
+
+    # `training_config.training == "sdxl_adapter"` specific config
+    adapter_type: Optional[Literal["openpose"]] = None
+
+    # TODO: bad naming
+    # `training_config.training == "sdxl_controlnet"` specific config
+    controlnet_type: Optional[Literal["canny", "inpainting"]] = None
+    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"] = "default"
+    controlnet_train_base_unet: bool = False
+
+    # core training config
+    learning_rate: float = 0.00001
+    gradient_accumulation_steps: int = 1
+    mixed_precision: Optional[torch.dtype] = None
+    batch_size: int = 8
+    max_train_steps: int = 30_000
+    resume_from: Optional[str] = None
+    start_step: int = 0
+
+    # data config
+    shuffle_buffer_size: int = 1000
+    proportion_empty_prompts: float = 0.1
+
+    # validation
+    validation_steps: int = 500
+    num_validation_images: int = 2
+    validation_prompts: Optional[List[str]] = None
+    validation_images: Optional[List[str]] = None
+
+    # checkpointing
+    checkpointing_steps: int = 1000
+    checkpoints_total_limit: int = 5
+
+    # wandb
+    project_name: Optional[str] = None
+    training_run_name: Optional[str] = None
+
+
+def training_loop():
+    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
+        raise ValueError(f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run.")
+
+    training_config_filename = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
+
+    if DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE in os.environ:
+        training_config_override_key = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE]
+    else:
+        training_config_override_key = None
+
+    training_config = load_training_config(training_config_filename, training_config_override_key)
+
     torch.cuda.set_device(device)
 
     dist.init_process_group("nccl")
@@ -58,10 +120,6 @@ def main():
         prefetch_factor=8,
     )
 
-    training_loop(dataloader=dataloader, training=training)
-
-
-def training_loop(dataloader, training):
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
 
@@ -159,7 +217,7 @@ def training_loop(dataloader, training):
             wandb.log(logs, step=global_step)
 
         if global_step % 10 == 0:
-            load_training_config()
+            training_config = load_training_config()
 
         if global_step >= training_config.max_train_steps:
             break
@@ -200,5 +258,39 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer,
     logger.info(f"Saved state to {save_path}")
 
 
+def load_training_config(training_config_filename, training_config_override_key=None):
+    with open(training_config_filename, "r") as f:
+        yaml_config: Dict = yaml.safe_load(f.read())
+
+    override_configs = yaml_config.pop("overrides", {})
+
+    if training_config_override_key is not None:
+        if training_config_override_key not in override_configs:
+            raise ValueError(f"{training_config_override_key} is not one of the available overrides {override_configs.keys()}")
+
+        yaml_config.update(override_configs[training_config_override_key])
+
+    if "mixed_precision" not in yaml_config or yaml_config["mixed_precision"] is None or yaml_config["mixed_precision"] == "no":
+        yaml_config["mixed_precision"] = None
+    elif yaml_config["mixed_precision"] == "fp16":
+        yaml_config["mixed_precision"] = torch.float16
+    elif yaml_config["mixed_precision"] == "bf16":
+        yaml_config["mixed_precision"] = torch.bfloat16
+    else:
+        assert False
+
+    training_config = Config(**yaml_config)
+
+    if training_config.training == "sdxl_adapter":
+        if training_config.adapter_type is None:
+            raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
+
+    if training_config.training == "sdxl_controlnet":
+        if training_config.controlnet_type is None:
+            raise ValueError('must set `controlnet_type` if `training` set to "sdxl_controlnet"')
+
+    return training_config
+
+
 if __name__ == "__main__":
-    main()
+    training_loop()
