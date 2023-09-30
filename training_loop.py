@@ -18,9 +18,6 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
-DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE = "DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE"
-
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
@@ -299,15 +296,15 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer,
 
 
 def load_config(config_cls):
-    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
-        raise ValueError(f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run.")
+    if "DIFFUSERS_UTILS_TRAINING_CONFIG" not in os.environ:
+        raise ValueError(f"Must set environment variable `'DIFFUSERS_UTILS_TRAINING_CONFIG'` to path to the yaml config to use for the training run.")
 
-    with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG], "r") as f:
+    with open(os.environ["DIFFUSERS_UTILS_TRAINING_CONFIG"], "r") as f:
         yaml_config: Dict = yaml.safe_load(f.read())
 
     override_configs = yaml_config.pop("overrides", {})
 
-    training_config_override_key = os.environ.get(DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE, None)
+    training_config_override_key = os.environ.get("DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE", None)
 
     if training_config_override_key is not None:
         if training_config_override_key not in override_configs:
