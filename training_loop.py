@@ -1,4 +1,3 @@
-import itertools
 import logging
 import os
 import shutil
@@ -15,8 +14,8 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
 from training_config import load_training_config, training_config
-from utils import maybe_ddp_module
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -29,14 +28,28 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-device_id = int(os.environ["LOCAL_RANK"])
+device = int(os.environ["LOCAL_RANK"])
 
 
 def main():
-    torch.cuda.set_device(device_id)
+    torch.cuda.set_device(device)
 
     dist.init_process_group("nccl")
 
+    get_sdxl_conditioning_images = GetSDXLConditioningImages.from_training_config(training_config)
+    training = SDXLTraining.from_training_config(device=device, training_config=training_config, get_sdxl_conditioning_images=get_sdxl_conditioning_images)
+    dataset = get_sdxl_dataset(
+        train_shards=training_config.train_shards,
+        shuffle_buffer_size=training_config.shuffle_buffer_size,
+        batch_size=training_config.batch_size,
+        proportion_empty_prompts=training_config.proportion_empty_prompts,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+    )
+
+    training_loop(dataset=dataset, training=training)
+
+
+def training_loop(dataset, training):
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
 
@@ -46,81 +59,12 @@ def main():
             config=training_config,
         )
 
-    if training_config.training == "sdxl_unet":
-        from sdxl import init_sdxl
-
-        init_sdxl()
-
-        from sdxl import (get_sdxl_dataset, sdxl_log_validation,
-                          sdxl_train_step, unet)
-
-        training_parameters = maybe_ddp_module(unet).parameters
-        parameters_to_clip = maybe_ddp_module(unet).parameters
-        dataset = get_sdxl_dataset()
-        log_validation = sdxl_log_validation
-        train_step = sdxl_train_step
-    elif training_config.training == "sdxl_adapter":
-        from sdxl import init_sdxl
-
-        init_sdxl()
-
-        from sdxl import (adapter, get_sdxl_dataset, sdxl_log_validation,
-                          sdxl_train_step)
-
-        training_parameters = maybe_ddp_module(adapter).parameters
-        parameters_to_clip = maybe_ddp_module(adapter).parameters
-        dataset = get_sdxl_dataset()
-        log_validation = sdxl_log_validation
-        train_step = sdxl_train_step
-    elif training_config.training == "sdxl_controlnet":
-        from sdxl import init_sdxl
-
-        init_sdxl()
-
-        from sdxl import (controlnet, get_sdxl_dataset, sdxl_log_validation,
-                          sdxl_train_step, unet)
-
-        if training_config.controlnet_train_base_unet:
-            training_parameters = lambda: itertools.chain(maybe_ddp_module(controlnet).parameters(), maybe_ddp_module(unet).up_blocks.parameters())
-            parameters_to_clip = lambda: itertools.chain(maybe_ddp_module(controlnet).parameters(), maybe_ddp_module(unet).up_blocks.parameters())
-        else:
-            training_parameters = maybe_ddp_module(controlnet).parameters
-            parameters_to_clip = maybe_ddp_module(controlnet).parameters
-
-        dataset = get_sdxl_dataset()
-        log_validation = sdxl_log_validation
-        train_step = sdxl_train_step
-    else:
-        assert False
-
-    training_loop(
-        training_parameters=training_parameters,
-        parameters_to_clip=parameters_to_clip,
-        dataset=dataset,
-        log_validation=log_validation,
-        train_step=train_step,
-    )
-
-    dist.barrier()
-
-    if dist.get_rank() == 0:
-        if training_config.training == "sdxl_unet":
-            safetensors.torch.save_file(unet.module.state_dict(), os.path.join(training_config.output_dir, "unet.safetensors"))
-        elif training_config.training == "sdxl_adapter":
-            safetensors.torch.save_file(adapter.module.state_dict(), os.path.join(training_config.output_dir, "adapter.safetensors"))
-        elif training_config.training == "sdxl_controlnet":
-            safetensors.torch.save_file(controlnet.module.state_dict(), os.path.join(training_config.output_dir, "controlnet.safetensors"))
-        else:
-            assert False
-
-
-def training_loop(training_parameters, parameters_to_clip, dataset, log_validation, train_step):
-    optimizer = AdamW8bit(training_parameters(), lr=training_config.learning_rate)
+    optimizer = AdamW8bit(training.parameters(), lr=training_config.learning_rate)
 
     lr_scheduler = LambdaLR(optimizer, lambda _: 1)
 
     if training_config.resume_from is not None:
-        load_checkpoint(training_config.resume_from, optimizer=optimizer)
+        optimizer.load_state_dict(safetensors.torch.load_file(os.path.join(training_config.resume_from, "optimizer.bin"), device=device))
 
     global_step = training_config.start_step
 
@@ -151,7 +95,7 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
         for _ in range(training_config.gradient_accumulation_steps):
             batch = next(dataloader)
 
-            loss = train_step(batch=batch)
+            loss = training.train_step(batch)
 
             if torch.isnan(loss):
                 logger.error("nan loss, ending training")
@@ -172,7 +116,7 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
 
         scaler.unscale_(optimizer)
 
-        clip_grad_norm_(parameters_to_clip(), 1.0)
+        clip_grad_norm_(training.parameters(), 1.0)
 
         scaler.step(optimizer)
 
@@ -197,7 +141,9 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
 
         if dist.get_rank() == 0 and global_step % training_config.validation_steps == 0:
             logger.info("Running validation... ")
-            log_validation(global_step)
+            training_config.log_validation(
+                step=global_step, num_validation_imges=training_config.num_validation_images, validation_prompts=training_config.validation_prompts, validation_images=training_config.validation_images
+            )
 
         if dist.get_rank() == 0:
             logs = {
@@ -216,8 +162,13 @@ def training_loop(training_parameters, parameters_to_clip, dataset, log_validati
         if global_step >= training_config.max_train_steps:
             break
 
+    dist.barrier()
 
-def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer):
+    if dist.get_rank() == 0:
+        training.save()
+
+
+def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer, training):
     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
     if checkpoints_total_limit is not None:
         checkpoints = os.listdir(output_dir)
@@ -240,30 +191,11 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer)
 
     os.makedirs(save_path, exist_ok=True)
 
-    torch.save(optimizer.state_dict(), os.path.join(save_path, "optimizer.bin"))
+    safetensors.torch.save_file(optimizer.state_dict(), os.path.join(save_path, "optimizer.safetensors"))
 
-    if training_config.training == "sdxl_adapter":
-        from sdxl import adapter
-
-        save_path = os.path.join(save_path, "adapter")
-
-        safetensors.torch.save_file(adapter.module.state_dict(), os.path.join(training_config.output_dir, "adapter.safetensors"))
-    elif training_config.training == "sdxl_controlnet":
-        from sdxl import controlnet, unet
-
-        safetensors.torch.save_file(controlnet.module.state_dict(), os.path.join(training_config.output_dir, "controlnet.safetensors"))
-
-        if training_config.controlnet_train_base_unet:
-            safetensors.torch.save_file(unet.module.up_blocks.state_dict(), unet_save_path=os.path.join(save_path, "unet.safetensors"))
-    else:
-        assert False
+    training.save(save_path)
 
     logger.info(f"Saved state to {save_path}")
-
-
-def load_checkpoint(resume_from, optimizer):
-    optimizer_state_dict = torch.load(os.path.join(resume_from, "optimizer.bin"), map_location=torch.device(device_id))
-    optimizer.load_state_dict(optimizer_state_dict)
 
 
 if __name__ == "__main__":

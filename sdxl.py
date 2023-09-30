@@ -1,8 +1,10 @@
+import itertools
 import os
 import random
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
+import safetensors.torch
 import torch
 import torch.nn.functional as F
 import torchvision.transforms
@@ -32,6 +34,9 @@ class SDXLTraining:
     unet: SDXLUNet
     adapter: Optional[SDXLAdapter]
     controlnet: Optional[Union[SDXLControlNet, SDXLControlNetFull]]
+
+    train_unet: bool
+    train_unet_up_blocks: bool
 
     mixed_precision: Optional[torch.dtype]
     timestep_sampling: Literal["uniform", "cubic"]
@@ -171,6 +176,9 @@ class SDXLTraining:
         self.log_validation_input_images_every_time = log_validation_input_images_every_time
 
         self.get_sdxl_conditioning_images = get_sdxl_conditioning_images
+
+        self.train_unet = train_unet
+        self.train_unet_up_blocks = train_unet_up_blocks
 
     def train_step(self, batch):
         with torch.no_grad():
@@ -341,6 +349,35 @@ class SDXLTraining:
 
         if controlnet is not None:
             controlnet.train()
+
+    def parameters(self):
+        if self.train_unet:
+            return self.unet.parameters()
+
+        if self.controlnet is not None and self.train_unet_up_blocks:
+            return itertools.chain(self.controlnet.parameters(), self.unet.up_blocks.parameters())
+
+        if self.controlnet is not None:
+            return self.controlnet.parameters()
+
+        if self.adapter is not None:
+            return self.adapter.parameters()
+
+        assert False
+
+    def save(self, save_to):
+        if self.train_unet:
+            safetensors.torch.save_file(self.unet.module.state_dict(), os.path.join(save_to, "unet.safetensors"))
+
+        if self.controlnet is not None and self.train_unet_up_blocks:
+            safetensors.torch.save_file(self.controlnet.module.state_dict(), os.path.join(save_to, "controlnet.safetensors"))
+            safetensors.torch.save_file(self.unet.module.up_blocks.state_dict(), os.path.join(save_to, "unet.safetensors"))
+
+        if self.controlnet is not None:
+            safetensors.torch.save_file(self.controlnet.module.state_dict(), os.path.join(save_to, "controlnet.safetensors"))
+
+        if self.adapter is not None:
+            safetensors.torch.save_file(self.adapter.module.state_dict(), os.path.join(save_to, "adapter.safetensors"))
 
 
 def get_sdxl_dataset(train_shards: str, shuffle_buffer_size: int, batch_size: int, proportion_empty_prompts: float, get_sdxl_conditioning_images=None):
