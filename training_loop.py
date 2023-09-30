@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import os
 import shutil
@@ -35,33 +36,14 @@ device = int(os.environ["LOCAL_RANK"])
 
 
 @dataclass
-class Config:
-    # required config
+class TrainingConfig:
     output_dir: str
-    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
-    train_shards: str
-
-    # `training_config.training == "sdxl_adapter"` specific config
-    adapter_type: Optional[Literal["openpose"]] = None
-
-    # TODO: bad naming
-    # `training_config.training == "sdxl_controlnet"` specific config
-    controlnet_type: Optional[Literal["canny", "inpainting"]] = None
-    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"] = "default"
-    controlnet_train_base_unet: bool = False
-
-    # core training config
     learning_rate: float = 0.00001
     gradient_accumulation_steps: int = 1
     mixed_precision: Optional[torch.dtype] = None
-    batch_size: int = 8
     max_train_steps: int = 30_000
     resume_from: Optional[str] = None
     start_step: int = 0
-
-    # data config
-    shuffle_buffer_size: int = 1000
-    proportion_empty_prompts: float = 0.1
 
     # validation
     validation_steps: int = 500
@@ -78,24 +60,105 @@ class Config:
     training_run_name: Optional[str] = None
 
 
-def training_loop():
-    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
-        raise ValueError(f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run.")
-
-    training_config_filename = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG]
-
-    if DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE in os.environ:
-        training_config_override_key = os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE]
-    else:
-        training_config_override_key = None
-
-    training_config = load_training_config(training_config_filename, training_config_override_key)
+def main():
+    from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
+    from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
+                             SDXLControlNetPreEncodedControlnetCond)
 
     torch.cuda.set_device(device)
 
     dist.init_process_group("nccl")
 
-    training, dataloader = load_sdxl_training(training_config)
+    @dataclass
+    class SDXLTrainingConfig:
+        training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
+        adapter_type: Optional[Literal["openpose"]]
+        controlnet_type: Optional[Literal["canny", "inpainting"]]
+        controlnet_variant: Optional[Literal["default", "full", "pre_encoded_controlnet_cond"]]
+        controlnet_train_base_unet: bool = False
+        mixed_precision: Optional[torch.dtype]
+        resume_from: Optional[str] = None
+        train_shards: str
+        shuffle_buffer_size: int = 1000
+        proportion_empty_prompts: float = 0.1
+        batch_size: int = 8
+
+    config = load_config(SDXLTrainingConfig)
+
+    if config.training == "sdxl_adapter":
+        if config.adapter_type is None:
+            raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
+
+    if config.training == "sdxl_controlnet":
+        if config.controlnet_type is None:
+            raise ValueError('must set `controlnet_type` if `training` set to "sdxl_controlnet"')
+
+    get_sdxl_conditioning_images = GetSDXLConditioningImages(controlnet_type=controlnet_type, controlnet_variant=controlnet_variant, adapter_type=adapter_type)
+
+    dataset = get_sdxl_dataset(
+        train_shards=config.train_shards,
+        shuffle_buffer_size=config.shuffle_buffer_size,
+        batch_size=config.batch_size,
+        proportion_empty_prompts=config.proportion_empty_prompts,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=8,
+    )
+
+    if config.training == "sdxl_controlnet":
+        if config.controlnet_variant == "default":
+            controlnet_cls = SDXLControlNet
+        elif config.controlnet_variant == "full":
+            controlnet_cls = SDXLControlNetFull
+        elif config.controlnet_variant == "pre_encoded_controlnet_cond":
+            controlnet_cls = SDXLControlNetPreEncodedControlnetCond
+        else:
+            assert False
+    else:
+        controlnet_cls = None
+
+    if config.training == "sdxl_adapter":
+        adapter_cls = SDXLAdapter
+    else:
+        adapter_cls = None
+
+    if config.training == "sdxl_adapter":
+        timestep_sampling = "cubic"
+    else:
+        timestep_sampling = "uniform"
+
+    if config.training == "sdxl_controlnet" and config.controlnet_type == "inpainting":
+        log_validation_input_images_every_time = True
+    else:
+        log_validation_input_images_every_time = False
+
+    training = SDXLTraining(
+        device=device,
+        train_unet=config.training == "sdxl_unet",
+        train_unet_up_blocks=config.training == "sdxl_controlnet" and config.controlnet_train_base_unet,
+        unet_resume_from=config.resume_from is not None and os.path.join(config.resume_from, "unet.safetensors"),
+        controlnet_cls=controlnet_cls,
+        adapter_cls=adapter_cls,
+        adapter_resume_from=config.resume_from is not None and os.path.join(config.resume_from, "adapter.safetensors"),
+        timestep_sampling=timestep_sampling,
+        log_validation_input_images_every_time=log_validation_input_images_every_time,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+        mixed_precision=config.mixed_precision,
+    )
+
+    training_loop(training, dataloader)
+
+
+def training_loop(training, dataloader):
+    training_config = load_config(TrainingConfig)
 
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
@@ -194,7 +257,7 @@ def training_loop():
             wandb.log(logs, step=global_step)
 
         if global_step % 10 == 0:
-            training_config = load_training_config()
+            training_config = load_config(TrainingConfig)
 
         if global_step >= training_config.max_train_steps:
             break
@@ -203,76 +266,6 @@ def training_loop():
 
     if dist.get_rank() == 0:
         training.save()
-
-
-def load_sdxl_training(training_config):
-    from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
-    from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
-                             SDXLControlNetPreEncodedControlnetCond)
-
-    get_sdxl_conditioning_images = GetSDXLConditioningImages(
-        controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type
-    )
-
-    dataset = get_sdxl_dataset(
-        train_shards=training_config.train_shards,
-        shuffle_buffer_size=training_config.shuffle_buffer_size,
-        batch_size=training_config.batch_size,
-        proportion_empty_prompts=training_config.proportion_empty_prompts,
-        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
-    )
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=None,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=8,
-    )
-
-    if training_config.training == "sdxl_controlnet":
-        if training_config.controlnet_variant == "default":
-            controlnet_cls = SDXLControlNet
-        elif training_config.controlnet_variant == "full":
-            controlnet_cls = SDXLControlNetFull
-        elif training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-            controlnet_cls = SDXLControlNetPreEncodedControlnetCond
-        else:
-            assert False
-    else:
-        controlnet_cls = None
-
-    if training_config.training == "sdxl_adapter":
-        adapter_cls = SDXLAdapter
-    else:
-        adapter_cls = None
-
-    if training_config.training == "sdxl_adapter":
-        timestep_sampling = "cubic"
-    else:
-        timestep_sampling = "uniform"
-
-    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting":
-        log_validation_input_images_every_time = True
-    else:
-        log_validation_input_images_every_time = False
-
-    training = SDXLTraining(
-        device=device,
-        train_unet=training_config.training == "sdxl_unet",
-        train_unet_up_blocks=training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet,
-        unet_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "unet.safetensors"),
-        controlnet_cls=controlnet_cls,
-        adapter_cls=adapter_cls,
-        adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
-        timestep_sampling=timestep_sampling,
-        log_validation_input_images_every_time=log_validation_input_images_every_time,
-        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
-    )
-
-    return training, dataloader
 
 
 def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer, training):
@@ -305,11 +298,16 @@ def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer,
     logger.info(f"Saved state to {save_path}")
 
 
-def load_training_config(training_config_filename, training_config_override_key=None):
-    with open(training_config_filename, "r") as f:
+def load_config(config_cls):
+    if DIFFUSERS_UTILS_TRAINING_CONFIG not in os.environ:
+        raise ValueError(f"Must set environment variable `{DIFFUSERS_UTILS_TRAINING_CONFIG}` to path to the yaml config to use for the training run.")
+
+    with open(os.environ[DIFFUSERS_UTILS_TRAINING_CONFIG], "r") as f:
         yaml_config: Dict = yaml.safe_load(f.read())
 
     override_configs = yaml_config.pop("overrides", {})
+
+    training_config_override_key = os.environ.get(DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE, None)
 
     if training_config_override_key is not None:
         if training_config_override_key not in override_configs:
@@ -326,15 +324,12 @@ def load_training_config(training_config_filename, training_config_override_key=
     else:
         assert False
 
-    training_config = Config(**yaml_config)
+    yaml_config_ = {}
 
-    if training_config.training == "sdxl_adapter":
-        if training_config.adapter_type is None:
-            raise ValueError('must set `adapter_type` if `training` set to "sdxl_adapter"')
+    for field in dataclasses.fields(config_cls):
+        yaml_config_[field.name] = yaml_config[field.name]
 
-    if training_config.training == "sdxl_controlnet":
-        if training_config.controlnet_type is None:
-            raise ValueError('must set `controlnet_type` if `training` set to "sdxl_controlnet"')
+    training_config = config_cls(**yaml_config_)
 
     return training_config
 
