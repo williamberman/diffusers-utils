@@ -1,4 +1,3 @@
-import dataclasses
 import logging
 import os
 import shutil
@@ -17,8 +16,6 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-
-from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
 
 DIFFUSERS_UTILS_TRAINING_CONFIG = "DIFFUSERS_UTILS_TRAINING_CONFIG"
 DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE = "DIFFUSERS_UTILS_TRAINING_CONFIG_OVERRIDE"
@@ -98,27 +95,7 @@ def training_loop():
 
     dist.init_process_group("nccl")
 
-    get_sdxl_conditioning_images = GetSDXLConditioningImages.from_training_config(training_config)
-
-    training = SDXLTraining.from_training_config(device=device, training_config=training_config, get_sdxl_conditioning_images=get_sdxl_conditioning_images)
-
-    dataset = get_sdxl_dataset(
-        train_shards=training_config.train_shards,
-        shuffle_buffer_size=training_config.shuffle_buffer_size,
-        batch_size=training_config.batch_size,
-        proportion_empty_prompts=training_config.proportion_empty_prompts,
-        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
-    )
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=None,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=8,
-    )
+    training, dataloader = load_sdxl_training(training_config)
 
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
@@ -226,6 +203,76 @@ def training_loop():
 
     if dist.get_rank() == 0:
         training.save()
+
+
+def load_sdxl_training(training_config):
+    from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
+    from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
+                             SDXLControlNetPreEncodedControlnetCond)
+
+    get_sdxl_conditioning_images = GetSDXLConditioningImages(
+        controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type
+    )
+
+    dataset = get_sdxl_dataset(
+        train_shards=training_config.train_shards,
+        shuffle_buffer_size=training_config.shuffle_buffer_size,
+        batch_size=training_config.batch_size,
+        proportion_empty_prompts=training_config.proportion_empty_prompts,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=8,
+    )
+
+    if training_config.training == "sdxl_controlnet":
+        if training_config.controlnet_variant == "default":
+            controlnet_cls = SDXLControlNet
+        elif training_config.controlnet_variant == "full":
+            controlnet_cls = SDXLControlNetFull
+        elif training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+            controlnet_cls = SDXLControlNetPreEncodedControlnetCond
+        else:
+            assert False
+    else:
+        controlnet_cls = None
+
+    if training_config.training == "sdxl_adapter":
+        adapter_cls = SDXLAdapter
+    else:
+        adapter_cls = None
+
+    if training_config.training == "sdxl_adapter":
+        timestep_sampling = "cubic"
+    else:
+        timestep_sampling = "uniform"
+
+    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting":
+        log_validation_input_images_every_time = True
+    else:
+        log_validation_input_images_every_time = False
+
+    training = SDXLTraining(
+        device=device,
+        train_unet=training_config.training == "sdxl_unet",
+        train_unet_up_blocks=training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet,
+        unet_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "unet.safetensors"),
+        controlnet_cls=controlnet_cls,
+        adapter_cls=adapter_cls,
+        adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
+        timestep_sampling=timestep_sampling,
+        log_validation_input_images_every_time=log_validation_input_images_every_time,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+    )
+
+    return training, dataloader
 
 
 def save_checkpoint(output_dir, checkpoints_total_limit, global_step, optimizer, training):

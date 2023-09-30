@@ -61,48 +61,6 @@ class SDXLTraining:
 
     get_sdxl_conditioning_images: Callable[[Image.Image], Dict[str, Any]]
 
-    @classmethod
-    def from_training_config(cls, training_config: Config, get_sdxl_conditioning_images, device):
-        if training_config.training == "sdxl_controlnet":
-            if training_config.controlnet_variant == "default":
-                controlnet_cls = SDXLControlNet
-            elif training_config.controlnet_variant == "full":
-                controlnet_cls = SDXLControlNetFull
-            elif training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-                controlnet_cls = SDXLControlNetPreEncodedControlnetCond
-            else:
-                assert False
-        else:
-            controlnet_cls = None
-
-        if training_config.training == "sdxl_adapter":
-            adapter_cls = SDXLAdapter
-        else:
-            adapter_cls = None
-
-        if training_config.training == "sdxl_adapter":
-            timestep_sampling = "cubic"
-        else:
-            timestep_sampling = "uniform"
-
-        if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting":
-            log_validation_input_images_every_time = True
-        else:
-            log_validation_input_images_every_time = False
-
-        return cls(
-            device=device,
-            train_unet=training_config.training == "sdxl_unet",
-            train_unet_up_blocks=training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet,
-            unet_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "unet.safetensors"),
-            controlnet_cls=controlnet_cls,
-            adapter_cls=adapter_cls,
-            adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
-            timestep_sampling=timestep_sampling,
-            log_validation_input_images_every_time=log_validation_input_images_every_time,
-            get_sdxl_conditioning_images=get_sdxl_conditioning_images,
-        )
-
     def __init__(
         self,
         device,
@@ -506,10 +464,6 @@ class GetSDXLConditioningImages:
     adapter_type: Optional[Literal["openpose"]]
     controlnet_type: Optional[Literal["canny", "inpainting"]]
     controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"]
-
-    @classmethod
-    def from_training_config(cls, training_config: Config):
-        return cls(controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type)
 
     def __init__(
         self,
