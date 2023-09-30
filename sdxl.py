@@ -1,9 +1,8 @@
 import os
 import random
-from typing import Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
-import safetensors.torch
 import torch
 import torch.nn.functional as F
 import torchvision.transforms
@@ -20,130 +19,117 @@ from diffusion import (default_num_train_timesteps, make_sigmas,
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
-from training_config import training_config
+from training_config import Config, training_config
 from utils import (get_random_crop_params, make_outpainting_mask,
                    make_random_irregular_mask, make_random_rectangle_mask,
                    maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
                    sdxl_tokenize_one, sdxl_tokenize_two)
 
-device_id = int(os.environ["LOCAL_RANK"])
 
-vae: SDXLVae = None
+class SDXLModels:
+    text_encoder_one: CLIPTextModel
+    text_encoder_two: CLIPTextModelWithProjection
+    vae: SDXLVae
+    sigmas: torch.Tensor
+    unet: SDXLUNet
+    adapter: Optional[SDXLAdapter]
+    controlnet: Optional[Union[SDXLControlNet, SDXLControlNetFull]]
 
-text_encoder_one: CLIPTextModel = None
-
-text_encoder_two: CLIPTextModelWithProjection = None
-
-unet: SDXLUNet = None
-
-sigmas: torch.Tensor = None
-
-adapter: SDXLAdapter = None
-
-controlnet: Union[SDXLControlNet, SDXLControlNetFull]
-
-_init_sdxl_called = False
-
-
-def init_sdxl():
-    global _init_sdxl_called, vae, text_encoder_one, text_encoder_two, unet, sigmas, adapter, controlnet
-
-    if _init_sdxl_called:
-        raise ValueError("`init_sdxl` called more than once")
-
-    _init_sdxl_called = True
-
-    text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
-    text_encoder_one.to(device=device_id)
-    text_encoder_one.requires_grad_(False)
-    text_encoder_one.eval()
-
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
-    text_encoder_two.to(device=device_id)
-    text_encoder_two.requires_grad_(False)
-    text_encoder_two.eval()
-
-    vae = SDXLVae.load_fp16_fix(device=device_id)
-    vae.requires_grad_(False)
-    vae.eval()
-
-    sigmas = make_sigmas().to(device=device_id)
-
-    if training_config.training == "sdxl_unet":
-        if training_config.resume_from is not None:
-            unet = SDXLUNet.load(training_config.resume_from)
+    @classmethod
+    def from_training_config(cls, training_config: Config, device):
+        if training_config.training == "sdxl_controlnet":
+            if training_config.controlnet_variant == "default":
+                controlnet_cls = SDXLControlNet
+            elif training_config.controlnet_variant == "full":
+                controlnet_cls = SDXLControlNetFull
+            elif training_config.controlnet_variant == "pre_encoded_controlnet_cond":
+                controlnet_cls = SDXLControlNetPreEncodedControlnetCond
+            else:
+                assert False
         else:
-            unet = SDXLUNet.load_fp32()
-    elif training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet:
-        unet = SDXLUNet.load_fp32()
+            controlnet_cls = None
 
-        if training_config.resume_from is not None:
-            import load_state_dict_patch
-
-            unet_state_dict = safetensors.torch.load_file(os.path.join(training_config.resume_from, "unet.safetensors"), device=device_id)
-
-            load_sd_results = unet.up_blocks.load_state_dict(unet_state_dict, strict=False, assign=True)
-
-            if len(load_sd_results.unexpected_keys) > 0:
-                raise ValueError(f"error loading state dict: {load_sd_results.unexpected_keys}")
-    else:
-        unet = SDXLUNet.load_fp16()
-
-    unet.to(device=device_id)
-    # TODO - add back
-    # unet.enable_gradient_checkpointing()
-
-    if training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet:
-        unet.requires_grad_(False)
-        unet.eval()
-
-        unet.up_blocks.requires_grad_(True)
-        unet.up_blocks.train()
-
-        unet = DDP(unet, device_ids=[device_id], find_unused_parameters=True)
-    elif training_config.training == "sdxl_unet":
-        unet.requires_grad_(True)
-        unet.train()
-        unet = DDP(unet, device_ids=[device_id])
-    else:
-        unet.requires_grad_(False)
-        unet.eval()
-
-    if training_config.training == "sdxl_adapter":
-        if training_config.resume_from is None:
-            adapter = SDXLAdapter()
+        if training_config.training == "sdxl_adapter":
+            adapter_cls = SDXLAdapter
         else:
-            adapter_repo = os.path.join(training_config.resume_from, "adapter")
-            adapter = SDXLAdapter.load(adapter_repo)
+            adapter_cls = None
 
-        adapter.to(device=device_id)
-        adapter.train()
-        adapter.requires_grad_(True)
-        adapter = DDP(adapter, device_ids=[device_id])
+        return cls(
+            device=device,
+            train_unet=training_config.training == "sdxl_unet",
+            train_unet_up_blocks=training_config.training == "sdxl_controlnet" and training_config.controlnet_train_base_unet,
+            unet_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "unet.safetensors"),
+            controlnet_cls=controlnet_cls,
+            adapter_cls=adapter_cls,
+            adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
+        )
 
-    if training_config.training == "sdxl_controlnet":
-        if training_config.controlnet_variant == "default":
-            controlnet_cls = SDXLControlNet
-        elif training_config.controlnet_variant == "full":
-            controlnet_cls = SDXLControlNetFull
-        elif training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-            controlnet_cls = SDXLControlNetPreEncodedControlnetCond
+    def __init__(self, device, train_unet, train_unet_up_blocks, unet_resume_from=None, controlnet_cls=None, controlnet_resume_from=None, adapter_cls=None, adapter_resume_from=None):
+        self.text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
+        self.text_encoder_one.to(device=device)
+        self.text_encoder_one.requires_grad_(False)
+        self.text_encoder_one.eval()
+
+        self.text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
+        self.text_encoder_two.to(device=device)
+        self.text_encoder_two.requires_grad_(False)
+        self.text_encoder_two.eval()
+
+        self.vae = SDXLVae.load_fp16_fix(device=device)
+        self.vae.requires_grad_(False)
+        self.vae.eval()
+
+        self.sigmas = make_sigmas(device=device)
+
+        if train_unet:
+            if unet_resume_from is None:
+                self.unet = SDXLUNet.load_fp32(device=device)
+            else:
+                self.unet = SDXLUNet.load(unet_resume_from, device=device)
+            self.unet.requires_grad_(True)
+            self.unet.train()
+            self.unet = DDP(self.unet, device_ids=[device])
+        elif train_unet_up_blocks:
+            if unet_resume_from is None:
+                self.unet = SDXLUNet.load_fp32(device=device)
+            else:
+                self.unet = SDXLUNet.load_fp32(device=device, overrides=[unet_resume_from])
+            self.unet.requires_grad_(False)
+            self.unet.eval()
+            self.unet.up_blocks.requires_grad_(True)
+            self.unet.up_blocks.train()
+            self.unet = DDP(self.unet, device_ids=[device], find_unused_parameters=True)
         else:
-            assert False
+            self.unet = SDXLUNet.load_fp16(device=device)
+            self.unet.requires_grad_(False)
+            self.unet.eval()
 
-        if training_config.resume_from is None:
-            controlnet = controlnet_cls.from_unet(unet)
+        if controlnet_cls is not None:
+            if controlnet_resume_from is None:
+                self.controlnet = controlnet_cls.from_unet(unet)
+                self.controlnet.to(device)
+            else:
+                self.controlnet = controlnet_cls.load(controlnet_resume_from, device=device)
+            self.controlnet.train()
+            self.controlnet.requires_grad_(True)
+            # TODO add back
+            # controlnet.enable_gradient_checkpointing()
+            # TODO - should be able to remove find_unused_parameters. Comes from pre encoded controlnet
+            self.controlnet = DDP(self.controlnet, device_ids=[device], find_unused_parameters=True)
         else:
-            controlnet_repo = os.path.join(training_config.resume_from, "controlnet")
-            controlnet = controlnet_cls.load(controlnet_repo)
+            self.controlnet = None
 
-        controlnet.to(device=device_id)
-        controlnet.train()
-        controlnet.requires_grad_(True)
-        # TODO add back
-        # controlnet.enable_gradient_checkpointing()
-        # TODO - should be able to remove find_unused_parameters. Comes from pre encoded controlnet
-        controlnet = DDP(controlnet, device_ids=[device_id], find_unused_parameters=True)
+        if adapter_cls is not None:
+            if adapter_resume_from is None:
+                self.adapter = adapter_cls()
+                self.adapter.to(device=device)
+            else:
+                self.adapter = adapter_cls.load(adapter_resume_from, device=device)
+            self.adapter.train()
+            self.adapter.requires_grad_(True)
+            self.adapter = DDP(self.adapter, device_ids=[device])
+        else:
+            self.adapter = None
 
 
 def get_sdxl_dataset():
@@ -234,6 +220,23 @@ def make_sample(d):
             sample["conditioning_image_mask"] = conditioning_images["conditioning_image_mask"]
 
     return sample
+
+
+def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, int]) -> Tuple[int, int, int, int]:
+    h, w = input_size
+
+    th, tw = output_size
+
+    if h < th or w < tw:
+        raise ValueError(f"Required crop size {(th, tw)} is larger than input image size {(h, w)}")
+
+    if w == tw and h == th:
+        return 0, 0, h, w
+
+    i = torch.randint(0, h - th + 1, size=(1,)).item()
+    j = torch.randint(0, w - tw + 1, size=(1,)).item()
+
+    return i, j, th, tw
 
 
 def conditioning_image_is_not_none(sample):

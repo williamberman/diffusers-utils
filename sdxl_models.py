@@ -22,16 +22,23 @@ class ModelUtils:
         return next(self.parameters()).device
 
     @classmethod
-    def load(cls, load_from, device):
+    def load(cls, load_from: str, device, overrides: Optional[List[str]] = None):
         import load_state_dict_patch
 
-        if os.path.isdir(load_from):
-            load_from = os.path.join(load_from, "diffusion_pytorch_model.safetensors")
+        load_from = [load_from]
+
+        load_from += overrides
+
+        state_dict = {}
+
+        for load_from_ in load_from:
+            if os.path.isdir(load_from_):
+                load_from_ = os.path.join(load_from_, "diffusion_pytorch_model.safetensors")
+
+            state_dict.update(safetensors.torch.load_file(load_from_, device=device))
 
         with torch.device("meta"):
             model = cls()
-
-        state_dict = safetensors.torch.load_file(load_from, device=device)
 
         model.load_state_dict(state_dict, assign=True)
 
@@ -193,16 +200,16 @@ class SDXLVae(nn.Module, ModelUtils):
         return x_pred
 
     @classmethod
-    def load_fp32(cls, device=None):
-        return cls.load("./weights/sdxl_vae.safetensors", device=device)
+    def load_fp32(cls, device=None, overrides=None):
+        return cls.load("./weights/sdxl_vae.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16(cls, device=None):
-        return cls.load("./weights/sdxl_vae.fp16.safetensors", device=device)
+    def load_fp16(cls, device=None, overrides=None):
+        return cls.load("./weights/sdxl_vae.fp16.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16_fix(cls, device=None):
-        return cls.load("./weights/sdxl_vae_fp16_fix.safetensors", device=device)
+    def load_fp16_fix(cls, device=None, overrides=None):
+        return cls.load("./weights/sdxl_vae_fp16_fix.safetensors", device=device, overrides=overrides)
 
 
 class SDXLUNet(nn.Module, ModelUtils):
@@ -421,12 +428,12 @@ class SDXLUNet(nn.Module, ModelUtils):
         return eps_hat
 
     @classmethod
-    def load_fp32(cls, device=None):
-        return cls.load("./weights/sdxl_unet.safetensors", device=device)
+    def load_fp32(cls, device=None, overrides=None):
+        return cls.load("./weights/sdxl_unet.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16(cls, device=None):
-        return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device)
+    def load_fp16(cls, device=None, overrides=None):
+        return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device, overrides=overrides)
 
 
 class SDXLControlNet(nn.Module, ModelUtils):

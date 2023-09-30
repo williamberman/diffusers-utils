@@ -1,5 +1,4 @@
 import random
-from typing import Tuple
 
 import numpy as np
 import torch
@@ -180,20 +179,3 @@ def apply_padding(mask, coord):
     ] = 1
 
     return mask
-
-
-def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, int]) -> Tuple[int, int, int, int]:
-    h, w = input_size
-
-    th, tw = output_size
-
-    if h < th or w < tw:
-        raise ValueError(f"Required crop size {(th, tw)} is larger than input image size {(h, w)}")
-
-    if w == tw and h == th:
-        return 0, 0, h, w
-
-    i = torch.randint(0, h - th + 1, size=(1,)).item()
-    j = torch.randint(0, w - tw + 1, size=(1,)).item()
-
-    return i, j, th, tw

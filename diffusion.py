@@ -6,8 +6,8 @@ default_num_train_timesteps = 1000
 
 
 @torch.no_grad()
-def make_sigmas(beta_start=0.00085, beta_end=0.012, num_train_timesteps=default_num_train_timesteps):
-    betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=torch.float32) ** 2
+def make_sigmas(beta_start=0.00085, beta_end=0.012, num_train_timesteps=default_num_train_timesteps, device=None):
+    betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=torch.float32, device=device) ** 2
 
     alphas = 1.0 - betas
     alphas_cumprod = torch.cumprod(alphas, dim=0)
