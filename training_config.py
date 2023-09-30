@@ -39,7 +39,6 @@ class Config:
     start_step: int = 0
 
     # data config
-    resolution: int = 1024
     shuffle_buffer_size: int = 1000
     proportion_empty_prompts: float = 0.1
 
