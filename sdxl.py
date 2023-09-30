@@ -360,7 +360,8 @@ class SDXLTraining:
                         generator=generator,
                     )
 
-                    x_0 = self.vae.decode(x_0)[0]
+                    x_0 = self.vae.decode(x_0)
+                    x_0 = self.vae.output_tensor_to_pil(x_0)[0]
 
                     output_validation_images.append(wandb.Image(x_0, caption=validation_prompt))
 
@@ -470,7 +471,7 @@ def make_sample(d, proportion_empty_prompts, get_sdxl_conditioning_images=None):
         "micro_conditioning": micro_conditioning,
         "text_input_ids_one": text_input_ids_one,
         "text_input_ids_two": text_input_ids_two,
-        "image": TF.normalize(TF.to_tensor(image), [0.5], [0.5]),
+        "image": SDXLVae.input_pil_to_tensor(image),
     }
 
     if get_sdxl_conditioning_images is not None:

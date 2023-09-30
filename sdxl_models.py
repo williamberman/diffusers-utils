@@ -5,6 +5,7 @@ from typing import List, Optional
 import safetensors.torch
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 import xformers
 from PIL import Image
 from torch import nn
@@ -189,6 +190,22 @@ class SDXLVae(nn.Module, ModelUtils):
             if "upsamplers" in up_block:
                 h = up_block["upsamplers"][0]["conv"](h)
 
+        h = self.decoder["conv_norm_out"](h)
+        h = self.decoder["conv_act"](h)
+        h = self.decoder["conv_out"](h)
+
+        x_pred = h
+
+        return x_pred
+
+    @classmethod
+    def input_pil_to_tensor(self, x):
+        x = TF.to_tensor(x)
+        x = TF.normalize(x, [0.5], [0.5])
+        return x
+
+    @classmethod
+    def output_tensor_to_pil(self, x_pred):
         x_pred = ((x_pred * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8).permute(0, 2, 3, 1)
 
         x_pred = x_pred.permute(0, 2, 3, 1).cpu().numpy()
