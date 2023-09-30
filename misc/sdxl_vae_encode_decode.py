@@ -1,5 +1,4 @@
 from PIL import Image
-import torchvision.transforms.functional as TF
 from sdxl_models import SDXLVae
 
 def main():
