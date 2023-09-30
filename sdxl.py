@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Optional, Tuple, Union
+from typing import List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -19,9 +19,9 @@ from diffusion import (default_num_train_timesteps, make_sigmas,
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
-from training_config import Config, training_config
-from utils import (get_random_crop_params, make_outpainting_mask,
-                   make_random_irregular_mask, make_random_rectangle_mask,
+from training_config import Config
+from utils import (make_outpainting_mask, make_random_irregular_mask,
+                   make_random_rectangle_mask, maybe_ddp_device,
                    maybe_ddp_dtype, maybe_ddp_module, sdxl_text_conditioning,
                    sdxl_tokenize_one, sdxl_tokenize_two)
 
@@ -34,6 +34,12 @@ class SDXLModels:
     unet: SDXLUNet
     adapter: Optional[SDXLAdapter]
     controlnet: Optional[Union[SDXLControlNet, SDXLControlNetFull]]
+
+    mixed_precision: Optional[torch.dtype]
+    timestep_sampling: Literal["uniform", "cubic"]
+
+    validation_images_logged: bool
+    log_validation_input_images_every_time: bool
 
     @classmethod
     def from_training_config(cls, training_config: Config, device):
@@ -54,6 +60,16 @@ class SDXLModels:
         else:
             adapter_cls = None
 
+        if training_config.training == "sdxl_adapter":
+            timestep_sampling = "cubic"
+        else:
+            timestep_sampling = "uniform"
+
+        if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting":
+            log_validation_input_images_every_time = True
+        else:
+            log_validation_input_images_every_time = False
+
         return cls(
             device=device,
             train_unet=training_config.training == "sdxl_unet",
@@ -62,9 +78,24 @@ class SDXLModels:
             controlnet_cls=controlnet_cls,
             adapter_cls=adapter_cls,
             adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
+            timestep_sampling=timestep_sampling,
+            log_validation_input_images_every_time=log_validation_input_images_every_time,
         )
 
-    def __init__(self, device, train_unet, train_unet_up_blocks, unet_resume_from=None, controlnet_cls=None, controlnet_resume_from=None, adapter_cls=None, adapter_resume_from=None):
+    def __init__(
+        self,
+        device,
+        train_unet,
+        train_unet_up_blocks,
+        unet_resume_from=None,
+        controlnet_cls=None,
+        controlnet_resume_from=None,
+        adapter_cls=None,
+        adapter_resume_from=None,
+        mixed_precision=None,
+        timestep_sampling="uniform",
+        log_validation_input_images_every_time=True,
+    ):
         self.text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
         self.text_encoder_one.to(device=device)
         self.text_encoder_one.requires_grad_(False)
@@ -130,6 +161,182 @@ class SDXLModels:
             self.adapter = DDP(self.adapter, device_ids=[device])
         else:
             self.adapter = None
+
+        self.mixed_precision = mixed_precision
+        self.timestep_sampling = timestep_sampling
+
+        self.validation_images_logged = False
+        self.log_validation_input_images_every_time = log_validation_input_images_every_time
+
+    def train_step(self, batch):
+        with torch.no_grad():
+            unet_dtype = maybe_ddp_dtype(self.unet)
+            unet_device = maybe_ddp_device(self.unet)
+
+            micro_conditioning = batch["micro_conditioning"].to(device=unet_device)
+
+            image = batch["image"].to(self.vae.device, dtype=self.vae.dtype)
+            latents = self.vae.encode(image).to(dtype=unet_dtype)
+
+            text_input_ids_one = batch["text_input_ids_one"].to(self.text_encoder_one.device)
+            text_input_ids_two = batch["text_input_ids_two"].to(self.text_encoder_two.device)
+
+            encoder_hidden_states, pooled_encoder_hidden_states = sdxl_text_conditioning(self.text_encoder_one, self.text_encoder_two, text_input_ids_one, text_input_ids_two)
+
+            encoder_hidden_states = encoder_hidden_states.to(dtype=unet_dtype)
+            pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(dtype=unet_dtype)
+
+            bsz = latents.shape[0]
+
+            if self.timestep_sampling == "uniform":
+                timesteps = torch.randint(0, default_num_train_timesteps, (bsz,), device=unet_device)
+            elif self.timestep_sampling == "cubic":
+                # Cubic sampling to sample a random timestep for each image
+                timesteps = torch.rand((bsz,), device=unet_device)
+                timesteps = (1 - timesteps**3) * default_num_train_timesteps
+                timesteps = timesteps.long()
+                timesteps = timesteps.clamp(0, default_num_train_timesteps - 1)
+            else:
+                assert False
+
+            sigmas_ = self.sigmas[timesteps].to(dtype=latents.dtype)
+
+            noise = torch.randn_like(latents)
+
+            noisy_latents = latents + noise * sigmas_
+
+            scaled_noisy_latents = noisy_latents / ((sigmas_**2 + 1) ** 0.5)
+
+            if "conditioning_image" in batch:
+                conditioning_image = batch["conditioning_image"].to(unet_device)
+
+            if self.controlnet is not None and isinstance(self.controlnet, SDXLControlNetPreEncodedControlnetCond):
+                controlnet_device = maybe_ddp_device(self.controlnet)
+                controlnet_dtype = maybe_ddp_dtype(self.controlnet)
+                conditioning_image = self.vae.encode(conditioning_image.to(self.vae.dtype)).to(device=controlnet_device, dtype=controlnet_dtype)
+                conditioning_image_mask = TF.resize(batch["conditioning_image_mask"], conditioning_image.shape[2:]).to(device=controlnet_device, dtype=controlnet_dtype)
+                conditioning_image = torch.concat((conditioning_image, conditioning_image_mask), dim=1)
+
+        with torch.autocast(
+            "cuda",
+            self.mixed_precision,
+            enabled=self.mixed_precision is not None,
+        ):
+            down_block_additional_residuals = None
+            mid_block_additional_residual = None
+            add_to_down_block_inputs = None
+            add_to_output = None
+
+            if self.adapter is not None:
+                down_block_additional_residuals = self.adapter(conditioning_image)
+
+            if self.controlnet is not None:
+                controlnet_out = self.controlnet(
+                    x_t=scaled_noisy_latents,
+                    t=timesteps,
+                    encoder_hidden_states=encoder_hidden_states,
+                    micro_conditioning=micro_conditioning,
+                    pooled_encoder_hidden_states=pooled_encoder_hidden_states,
+                    controlnet_cond=conditioning_image,
+                )
+
+                down_block_additional_residuals = controlnet_out["down_block_res_samples"]
+                mid_block_additional_residual = controlnet_out["mid_block_res_sample"]
+                add_to_down_block_inputs = controlnet_out.get("add_to_down_block_inputs", None)
+                add_to_output = controlnet_out.get("add_to_output", None)
+
+            model_pred = self.unet(
+                x_t=scaled_noisy_latents,
+                t=timesteps,
+                encoder_hidden_states=encoder_hidden_states,
+                micro_conditioning=micro_conditioning,
+                pooled_encoder_hidden_states=pooled_encoder_hidden_states,
+                down_block_additional_residuals=down_block_additional_residuals,
+                mid_block_additional_residual=mid_block_additional_residual,
+                add_to_down_block_inputs=add_to_down_block_inputs,
+                add_to_output=add_to_output,
+            ).sample
+
+            loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
+
+        return loss
+
+    @torch.no_grad()
+    def log_validation(self, step, num_validation_images: int, validation_prompts: Optional[List[str]] = None, validation_images: Optional[List[str]] = None):
+        unet = maybe_ddp_module(self.unet)
+        unet.eval()
+
+        if self.adapter is not None:
+            adapter = maybe_ddp_module(self.adapter)
+            adapter.eval()
+        else:
+            adapter = None
+
+        if self.controlnet is not None:
+            controlnet = maybe_ddp_module(self.controlnet)
+            controlnet.eval()
+        else:
+            controlnet = None
+
+        formatted_validation_images = None
+
+        if validation_images is not None:
+            formatted_validation_images = []
+            wandb_validation_images = []
+
+            for validation_image_path in validation_images:
+                validation_image = Image.open(validation_image_path)
+                validation_image = validation_image.convert("RGB")
+                validation_image = validation_image.resize((1024, 1024))
+
+                conditioning_images = get_sdxl_conditioning_images(validation_image)
+
+                conditioning_image = conditioning_images["conditioning_image"]
+
+                if self.controlnet is not None and isinstance(self.controlnet, SDXLControlNetPreEncodedControlnetCond):
+                    conditioning_image = self.vae.encode(conditioning_image[None, :, :, :].to(self.vae.device, dtype=self.vae.dtype))
+                    conditionin_mask_image = TF.resize(conditioning_images["conditioning_mask_image"], conditioning_image.shape[2:]).to(conditioning_image.dtype, conditioning_image.device)
+                    conditioning_image = torch.concat(conditioning_image, conditionin_mask_image, dim=1)
+
+                formatted_validation_images.append(conditioning_image)
+                wandb_validation_images.append(wandb.Image(conditioning_images["conditioning_image_as_pil"]))
+
+            if self.log_validation_input_images_every_time or not self.validation_images_logged:
+                wandb.log({"validation_conditioning": wandb_validation_images}, step=step)
+                self.validation_images_logged = True
+
+        generator = torch.Generator().manual_seed(0)
+
+        output_validation_images = []
+
+        for formatted_validation_image, validation_prompt in zip(formatted_validation_images, validation_prompts):
+            for _ in range(num_validation_images):
+                with torch.autocast("cuda"):
+                    x_0 = sdxl_diffusion_loop(
+                        prompts=validation_prompt,
+                        images=formatted_validation_image,
+                        unet=unet,
+                        text_encoder_one=self.text_encoder_one,
+                        text_encoder_two=self.text_encoder_two,
+                        controlnet=controlnet,
+                        adapter=adapter,
+                        sigmas=self.sigmas,
+                        generator=generator,
+                    )
+
+                    x_0 = self.vae.decode(x_0)[0]
+
+                    output_validation_images.append(wandb.Image(x_0, caption=validation_prompt))
+
+        wandb.log({"validation": output_validation_images}, step=step)
+
+        unet.train()
+
+        if adapter is not None:
+            adapter.train()
+
+        if controlnet is not None:
+            controlnet.train()
 
 
 def get_sdxl_dataset():
@@ -241,179 +448,6 @@ def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, 
 
 def conditioning_image_is_not_none(sample):
     return sample["conditioning_image"] is not None
-
-
-def sdxl_train_step(batch):
-    with torch.no_grad():
-        unet_dtype = maybe_ddp_dtype(unet)
-
-        micro_conditioning = batch["micro_conditioning"].to(device=device_id)
-
-        image = batch["image"].to(device_id, dtype=vae.dtype)
-        latents = vae.encode(image).to(dtype=unet_dtype)
-
-        text_input_ids_one = batch["text_input_ids_one"].to(device_id)
-        text_input_ids_two = batch["text_input_ids_two"].to(device_id)
-
-        encoder_hidden_states, pooled_encoder_hidden_states = sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two)
-
-        encoder_hidden_states = encoder_hidden_states.to(dtype=unet_dtype)
-        pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(dtype=unet_dtype)
-
-        bsz = latents.shape[0]
-
-        if training_config.training == "sdxl_adapter":
-            # Cubic sampling to sample a random timestep for each image
-            timesteps = torch.rand((bsz,), device=device_id)
-            timesteps = (1 - timesteps**3) * default_num_train_timesteps
-            timesteps = timesteps.long()
-            timesteps = timesteps.clamp(0, default_num_train_timesteps - 1)
-        else:
-            timesteps = torch.randint(0, default_num_train_timesteps, (bsz,), device=device_id)
-
-        sigmas_ = sigmas[timesteps].to(dtype=latents.dtype)
-
-        noise = torch.randn_like(latents)
-
-        noisy_latents = latents + noise * sigmas_
-
-        scaled_noisy_latents = noisy_latents / ((sigmas_**2 + 1) ** 0.5)
-
-        if "conditioning_image" in batch:
-            conditioning_image = batch["conditioning_image"].to(device_id)
-
-        if training_config.training == "sdxl_controlnet" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-            controlnet_dtype = maybe_ddp_dtype(controlnet)
-            conditioning_image = vae.encode(conditioning_image.to(vae.dtype)).to(dtype=controlnet_dtype)
-            conditioning_image_mask = TF.resize(batch["conditioning_image_mask"], conditioning_image.shape[2:]).to(device=device_id, dtype=controlnet_dtype)
-            conditioning_image = torch.concat((conditioning_image, conditioning_image_mask), dim=1)
-
-    with torch.autocast(
-        "cuda",
-        training_config.mixed_precision,
-        enabled=training_config.mixed_precision is not None,
-    ):
-        down_block_additional_residuals = None
-        mid_block_additional_residual = None
-        add_to_down_block_inputs = None
-        add_to_output = None
-
-        if training_config.training == "sdxl_adapter":
-            down_block_additional_residuals = adapter(conditioning_image)
-
-        if training_config.training == "sdxl_controlnet":
-            controlnet_out = controlnet(
-                x_t=scaled_noisy_latents,
-                t=timesteps,
-                encoder_hidden_states=encoder_hidden_states,
-                micro_conditioning=micro_conditioning,
-                pooled_encoder_hidden_states=pooled_encoder_hidden_states,
-                controlnet_cond=conditioning_image,
-            )
-
-            down_block_additional_residuals = controlnet_out["down_block_res_samples"]
-            mid_block_additional_residual = controlnet_out["mid_block_res_sample"]
-            add_to_down_block_inputs = controlnet_out.get("add_to_down_block_inputs", None)
-            add_to_output = controlnet_out.get("add_to_output", None)
-
-        model_pred = unet(
-            x_t=scaled_noisy_latents,
-            t=timesteps,
-            encoder_hidden_states=encoder_hidden_states,
-            micro_conditioning=micro_conditioning,
-            pooled_encoder_hidden_states=pooled_encoder_hidden_states,
-            down_block_additional_residuals=down_block_additional_residuals,
-            mid_block_additional_residual=mid_block_additional_residual,
-            add_to_down_block_inputs=add_to_down_block_inputs,
-            add_to_output=add_to_output,
-        ).sample
-
-        loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
-
-    return loss
-
-
-_validation_images_logged = False
-
-
-@torch.no_grad()
-def sdxl_log_validation(step):
-    global _validation_images_logged
-
-    unet_ = maybe_ddp_module(unet)
-    unet_.eval()
-
-    if training_config.training == "sdxl_adapter":
-        adapter_ = maybe_ddp_module(adapter)
-        adapter_.eval()
-    else:
-        adapter_ = None
-
-    if training_config.training == "sdxl_controlnet":
-        controlnet_ = maybe_ddp_module(controlnet)
-        controlnet_.eval()
-    else:
-        controlnet_ = None
-
-    formatted_validation_images = None
-
-    if training_config.training in ["sdxl_adapter", "sdxl_controlnet"]:
-        formatted_validation_images = []
-        wandb_validation_images = []
-
-        for validation_image_path in training_config.validation_images:
-            validation_image = Image.open(validation_image_path)
-            validation_image = validation_image.convert("RGB")
-            validation_image = validation_image.resize((training_config.resolution, training_config.resolution))
-
-            conditioning_images = get_sdxl_conditioning_images(validation_image)
-
-            conditioning_image = conditioning_images["conditioning_image"]
-
-            if training_config.training == "sdxl_controlnet" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-                conditioning_image = vae.encode(conditioning_image[None, :, :, :].to(vae.device, dtype=vae.dtype))
-                conditionin_mask_image = TF.resize(conditioning_images["conditioning_mask_image"], conditioning_image.shape[2:]).to(conditioning_image.dtype, conditioning_image.device)
-                conditioning_image = torch.concat(conditioning_image, conditionin_mask_image, dim=1)
-
-            formatted_validation_images.append(conditioning_image)
-            wandb_validation_images.append(wandb.Image(conditioning_images["conditioning_image_as_pil"]))
-
-        if training_config.controlnet_type == "inpainting" or not _validation_images_logged:
-            wandb.log({"validation_conditioning": wandb_validation_images}, step=step)
-            _validation_images_logged = True
-
-    generator = torch.Generator().manual_seed(0)
-
-    output_validation_images = []
-
-    for formatted_validation_image, validation_prompt in zip(formatted_validation_images, training_config.validation_prompts):
-        for _ in range(training_config.num_validation_images):
-            with torch.autocast("cuda"):
-                x_0 = sdxl_diffusion_loop(
-                    prompts=validation_prompt,
-                    images=formatted_validation_image,
-                    unet=unet_,
-                    text_encoder_one=text_encoder_one,
-                    text_encoder_two=text_encoder_two,
-                    controlnet=controlnet_,
-                    adapter=adapter_,
-                    sigmas=sigmas,
-                    generator=generator,
-                )
-
-                x_0 = vae.decode(x_0)[0]
-
-                output_validation_images.append(wandb.Image(x_0, caption=validation_prompt))
-
-    wandb.log({"validation": output_validation_images}, step=step)
-
-    unet_.train()
-
-    if adapter_ is not None:
-        adapter_.train()
-
-    if controlnet_ is not None:
-        controlnet_.train()
 
 
 if training_config.training == "sdxl_adapter" and training_config.adapter_type == "openpose":

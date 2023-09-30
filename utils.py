@@ -18,6 +18,12 @@ def maybe_ddp_module(m):
     return m
 
 
+def maybe_ddp_device(m):
+    if isinstance(m, DDP):
+        m = m.module
+    return m.device
+
+
 # TODO: would be nice to just call a function from a tokenizers https://github.com/huggingface/tokenizers
 # i.e. afaik tokenizing shouldn't require holding any state
 
