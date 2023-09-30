@@ -4,14 +4,12 @@ from argparse import ArgumentParser
 from logging import getLogger
 
 import numpy as np
-from torch.utils.data import DataLoader
-
 import webdataset as wds
-from controlnet_aux import OpenposeDetector, DWposeDetector
+from controlnet_aux import DWposeDetector, OpenposeDetector
 from controlnet_aux.open_pose import draw_poses
 from controlnet_aux.util import HWC3
 from PIL import Image
-
+from torch.utils.data import DataLoader
 
 logger = getLogger(__name__)
 
@@ -40,12 +38,7 @@ def main():
             " the env vars `$SLURM_NTASKS` and `$SLURM_PROCID`."
         ),
     )
-    args.add_argument(
-        "--pose_algorithm",
-        required=False,
-        choices=["openpose", "dwpose"],
-        default="openpose"
-    )
+    args.add_argument("--pose_algorithm", required=False, choices=["openpose", "dwpose"], default="openpose")
     args = args.parse_args()
 
     dataset = "s3://muse-datasets/laion-aesthetic6plus-min512-data"
@@ -69,9 +62,7 @@ def main():
         slurm_procid = int(os.environ["SLURM_PROCID"])
         slurm_ntasks = int(os.environ["SLURM_NTASKS"])
 
-        distributed_shards = distribute_shards(
-            args.start_shard, args.end_shard, slurm_ntasks
-        )
+        distributed_shards = distribute_shards(args.start_shard, args.end_shard, slurm_ntasks)
 
         start_shard_task, end_shard_task = distributed_shards[slurm_procid]
 
@@ -86,9 +77,7 @@ def main():
         logger.warning("************")
         logger.warning(f"all slurm processes")
         for slurm_proc_id_, (start_shard, end_shard) in enumerate(distributed_shards):
-            logger.warning(
-                f"slurm process: {slurm_proc_id_}, start_shard: {start_shard}, end_shard: {end_shard}"
-            )
+            logger.warning(f"slurm process: {slurm_proc_id_}, start_shard: {start_shard}, end_shard: {end_shard}")
         logger.warning("************")
 
     if args.pose_algorithm == "openpose":
@@ -100,12 +89,8 @@ def main():
         assert False
 
     for shard in range(args.start_shard, args.end_shard + 1):
-        download_command = (
-            f"pipe:aws s3 cp {dataset}/{format_shard_number(shard)}.tar -"
-        )
-        upload_command = (
-            f"pipe:aws s3 cp - {upload_to}/{format_shard_number(shard)}.tar"
-        )
+        download_command = f"pipe:aws s3 cp {dataset}/{format_shard_number(shard)}.tar -"
+        upload_command = f"pipe:aws s3 cp - {upload_to}/{format_shard_number(shard)}.tar"
 
         logger.warning(f"download {download_command}")
         logger.warning(f"upload {upload_command}")
@@ -113,9 +98,7 @@ def main():
         src = (
             wds.WebDataset(download_command, handler=wds.warn_and_continue)
             .decode("pil", handler=wds.warn_and_continue)
-            .rename(
-                image="jpg;png;jpeg;webp", prompt="text;txt;caption", metadata="json"
-            )
+            .rename(image="jpg;png;jpeg;webp", prompt="text;txt;caption", metadata="json")
             .map(
                 lambda dict: {
                     "__key__": dict["__key__"],
@@ -200,15 +183,7 @@ def distribute_shards(start_shard_all, end_shard_all, slurm_ntasks):
         end_shard = start_shard + shards_per_task[slurm_procid] - 1
         distributed_shards.append((start_shard, end_shard))
 
-    assert (
-        sum(
-            [
-                end_shard - start_shard + 1
-                for start_shard, end_shard in distributed_shards
-            ]
-        )
-        == total_shards
-    )
+    assert sum([end_shard - start_shard + 1 for start_shard, end_shard in distributed_shards]) == total_shards
 
     return distributed_shards
 
