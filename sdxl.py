@@ -503,28 +503,25 @@ def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, 
 
 
 class GetSDXLConditioningImages:
-    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
     adapter_type: Optional[Literal["openpose"]]
     controlnet_type: Optional[Literal["canny", "inpainting"]]
     controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"]
 
     @classmethod
     def from_training_config(cls, training_config: Config):
-        return cls(training=training_config.training, controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type)
+        return cls(controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type)
 
     def __init__(
         self,
-        training,
         controlnet_type,
         controlnet_variant,
         adapter_type,
     ):
-        self.training = training
         self.controlnet_type = controlnet_type
         self.controlnet_variant = controlnet_variant
         self.adapter_type = adapter_type
 
-        if training == "sdxl_adapter" and self.adapter_type == "openpose":
+        if self.adapter_type == "openpose":
             from controlnet_aux import OpenposeDetector
 
             self.open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
@@ -532,7 +529,7 @@ class GetSDXLConditioningImages:
     def __call__(self, image):
         resolution = image.width
 
-        if self.training == "sdxl_adapter" and self.adapter_type == "openpose":
+        if self.adapter_type == "openpose":
             conditioning_image = self.open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
 
             if (conditioning_image == 0).all():
@@ -542,7 +539,7 @@ class GetSDXLConditioningImages:
 
             conditioning_image = TF.to_tensor(conditioning_image)
 
-        if self.training == "sdxl_controlnet" and self.controlnet_type == "canny":
+        if self.controlnet_type == "canny":
             import cv2
 
             conditioning_image = np.array(image)
@@ -554,7 +551,7 @@ class GetSDXLConditioningImages:
 
             conditioning_image = TF.to_tensor(conditioning_image)
 
-        if self.training == "sdxl_controlnet" and self.controlnet_type == "inpainting" and self.controlnet_variant == "pre_encoded_controlnet_cond":
+        if self.controlnet_type == "inpainting" and self.controlnet_variant == "pre_encoded_controlnet_cond":
             if random.random() <= 0.25:
                 conditioning_image_mask = np.ones((resolution, resolution), np.float32)
             else:
@@ -582,7 +579,7 @@ class GetSDXLConditioningImages:
                 # where mask is set to 1, set to -1 "special" masked image pixel.
                 # -1 is outside of the 0-1 range that the controlnet normalized
                 # input is in.
-                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask > 0.5)
+                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask >= 0.5)
 
         return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
 
@@ -752,8 +749,26 @@ def apply_padding(mask, coord):
 
 @torch.no_grad()
 def sdxl_diffusion_loop(
-    prompts, images, unet, text_encoder_one, text_encoder_two, controlnet=None, adapter=None, sigmas=None, timesteps=None, x_T=None, micro_conditioning=None, guidance_scale=5.0, generator=None
+    prompts,
+    unet,
+    text_encoder_one,
+    text_encoder_two,
+    images=None,
+    controlnet=None,
+    adapter=None,
+    sigmas=None,
+    timesteps=None,
+    x_T=None,
+    micro_conditioning=None,
+    guidance_scale=5.0,
+    generator=None,
+    negative_prompts=None,
 ):
+    if negative_prompts is None:
+        negative_prompts = [""] * len(prompts)
+
+    prompts += negative_prompts
+
     encoder_hidden_states, pooled_encoder_hidden_states = sdxl_text_conditioning(
         text_encoder_one,
         text_encoder_two,
@@ -766,7 +781,7 @@ def sdxl_diffusion_loop(
         x_T = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
 
     if sigmas is None:
-        sigmas = make_sigmas()
+        sigmas = make_sigmas(device=unet.device)
 
     if timesteps is None:
         timesteps = torch.linspace(0, sigmas.numel(), 50, dtype=torch.long, device=unet.device)
@@ -860,3 +875,134 @@ def sdxl_eps_theta(
         eps_hat = eps_hat_uncond + guidance_scale * (eps_hat - eps_hat_uncond)
 
     return eps_hat
+
+
+def gen_sdxl_simplified_interface(
+    controlnet_checkpoint,
+    controlnet,
+    adapter_checkpoint,
+    num_inference_steps,
+    image,
+    mask,
+    apply_conditioning,
+    prompt,
+    num_images,
+    device,
+):
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+
+    text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_one.to(device=device)
+
+    text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
+    text_encoder_two.to(device=device)
+
+    vae = SDXLVae.load_fp16_fix(device=device)
+
+    unet = SDXLUNet.load_fp16(device=device)
+
+    if controlnet_checkpoint is not None:
+        if controlnet == "SDXLControlNet":
+            controlnet = SDXLControlNet.load(controlnet_checkpoint, device=device, dtype=torch.float16)
+        elif controlnet == "SDXLControlNetFull":
+            controlnet = SDXLControlNetFull.load(controlnet_checkpoint, device=device, dtype=torch.float16)
+        elif controlnet == "SDXLControlNetPreEncodedControlnetCond":
+            controlnet = SDXLControlNetPreEncodedControlnetCond.load(controlnet_checkpoint, device=device, dtype=torch.float16)
+        else:
+            assert False
+    else:
+        controlnet = None
+
+    if adapter_checkpoint is not None:
+        adapter = SDXLAdapter.load(adapter_checkpoint, device=device, dtype=torch.float16)
+    else:
+        adapter = None
+
+    negative_prompt = "text, watermark, low-quality, signature, moiré pattern, downsampling, aliasing, distorted, blurry, glossy, blur, jpeg artifacts, compression artifacts, poorly drawn, low-resolution, bad, distortion, twisted, excessive, exaggerated pose, exaggerated limbs, grainy, symmetrical, duplicate, error, pattern, beginner, pixelated, fake, hyper, glitch, overexposed, high-contrast, bad-contrast"
+
+    sigmas = make_sigmas()
+
+    timesteps = torch.linspace(0, sigmas.numel(), num_inference_steps, dtype=torch.long, device=unet.device)
+
+    if image is not None:
+        image = Image.open(image)
+        image = image.convert("RGB")
+        image = image.resize((1024, 1024))
+
+        if apply_conditioning == "canny":
+            import cv2
+
+            image = np.array(image)
+            image = cv2.Canny(image, 100, 200)
+            image = image[:, :, None]
+            controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
+
+        image = TF.to_tensor(image)
+
+        if mask is not None:
+            mask = Image.open(mask)
+            mask = mask.convert("L")
+            mask = mask.resize((1024, 1024))
+            mask = TF.to_tensor(mask)
+
+            if controlnet == "SDXLControlNetPreEncodedControlnetCond":
+                image = image * (mask < 0.5)
+                image = TF.normalized(image, [0.5], [0.5])
+                image = vae.encode(image)
+                mask = TF.resize(mask, (1024 // 8, 1024 // 8))
+                image = torch.concat((image, mask))
+            else:
+                image = image * (mask < 0.5) + -1.0 * (mask >= 0.5)
+
+    x_0 = sdxl_diffusion_loop(
+        prompts=[prompt] * num_images,
+        negative_prompts=[negative_prompt] * num_images,
+        unet=unet,
+        text_encoder_one=text_encoder_one,
+        text_encoder_two=text_encoder_two,
+        sigmas=sigmas,
+        timesteps=timesteps,
+        controlnet=controlnet,
+        adapter=adapter,
+        images=image,
+    )
+
+    x_0 = vae.decode(x_0)
+    x_0 = vae.output_tensor_to_pil(x_0)
+
+    for i, image in enumerate(x_0):
+        image.save(f"out_{i}.png")
+
+
+if __name__ == "__main__":
+    from argparse import ArgumentParser
+
+    args = ArgumentParser()
+    args.add_argument("--prompt", required=True, type=str)
+    args.add_argument("--num_images", required=True, type=int, default=1)
+    args.add_argument("--num_inference_steps", required=False, type=int, default=50)
+    args.add_argument("--image", required=False, type=str, default=None)
+    args.add_argument("--mask", required=False, type=str, default=None)
+    args.add_argument("--controlnet_checkpoint", required=False, type=str, default=None)
+    args.add_argument("--controlnet", required=False, choices=["SDXLControlNet", "SDXLControlNetFull", "SDXLControNetPreEncodedControlnetCond"], default=None)
+    args.add_argument("--adapter_checkpoint", required=False, type=str, default=None)
+    args.add_argument("--apply_conditioning", choices=["canny"], required=False, default=None)
+    args.add_argument("--device", required=False, default=None)
+    args = args.parse_args()
+
+    gen_sdxl_simplified_interface(
+        prompt=args.prompt,
+        num_images=args.num_images,
+        num_inference_steps=args.num_inference_steps,
+        image=args.image,
+        mask=args.mask,
+        controlnet_checkpoint=args.controlnet_checkpoint,
+        controlnet=args.controlnet,
+        adapter_checkpoint=args.adapter_checkpoint,
+        apply_conditioning=args.apply_conditioning,
+        device=args.device,
+    )

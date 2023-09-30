@@ -202,6 +202,8 @@ class SDXLVae(nn.Module, ModelUtils):
     def input_pil_to_tensor(self, x):
         x = TF.to_tensor(x)
         x = TF.normalize(x, [0.5], [0.5])
+        if x.ndim == 3:
+            x = x[None, :, :, :]
         return x
 
     @classmethod
