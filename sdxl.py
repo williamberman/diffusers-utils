@@ -1,6 +1,6 @@
 import os
 import random
-from typing import List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -12,7 +12,8 @@ import webdataset as wds
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
-from transformers import CLIPTextModel, CLIPTextModelWithProjection
+from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
+                          CLIPTokenizerFast)
 
 from diffusion import (default_num_train_timesteps, make_sigmas,
                        sdxl_diffusion_loop)
@@ -41,8 +42,10 @@ class SDXLModels:
     validation_images_logged: bool
     log_validation_input_images_every_time: bool
 
+    get_sdxl_conditioning_images: Callable[[Image.Image], Dict[str, Any]]
+
     @classmethod
-    def from_training_config(cls, training_config: Config, device):
+    def from_training_config(cls, training_config: Config, get_sdxl_conditioning_images, device):
         if training_config.training == "sdxl_controlnet":
             if training_config.controlnet_variant == "default":
                 controlnet_cls = SDXLControlNet
@@ -80,13 +83,15 @@ class SDXLModels:
             adapter_resume_from=training_config.resume_from is not None and os.path.join(training_config.resume_from, "adapter.safetensors"),
             timestep_sampling=timestep_sampling,
             log_validation_input_images_every_time=log_validation_input_images_every_time,
+            get_sdxl_conditioning_images=get_sdxl_conditioning_images,
         )
 
     def __init__(
         self,
         device,
         train_unet,
-        train_unet_up_blocks,
+        get_sdxl_conditioning_images,
+        train_unet_up_blocks=False,
         unet_resume_from=None,
         controlnet_cls=None,
         controlnet_resume_from=None,
@@ -137,7 +142,7 @@ class SDXLModels:
 
         if controlnet_cls is not None:
             if controlnet_resume_from is None:
-                self.controlnet = controlnet_cls.from_unet(unet)
+                self.controlnet = controlnet_cls.from_unet(self.unet)
                 self.controlnet.to(device)
             else:
                 self.controlnet = controlnet_cls.load(controlnet_resume_from, device=device)
@@ -167,6 +172,8 @@ class SDXLModels:
 
         self.validation_images_logged = False
         self.log_validation_input_images_every_time = log_validation_input_images_every_time
+
+        self.get_sdxl_conditioning_images = get_sdxl_conditioning_images
 
     def train_step(self, batch):
         with torch.no_grad():
@@ -289,7 +296,7 @@ class SDXLModels:
                 validation_image = validation_image.convert("RGB")
                 validation_image = validation_image.resize((1024, 1024))
 
-                conditioning_images = get_sdxl_conditioning_images(validation_image)
+                conditioning_images = self.get_sdxl_conditioning_images(validation_image)
 
                 conditioning_image = conditioning_images["conditioning_image"]
 
@@ -339,14 +346,14 @@ class SDXLModels:
             controlnet.train()
 
 
-def get_sdxl_dataset():
+def get_sdxl_dataset(train_shards: str, shuffle_buffer_size: int, batch_size: int, proportion_empty_prompts: float, get_sdxl_conditioning_images=None):
     dataset = (
         wds.WebDataset(
-            training_config.train_shards,
+            train_shards,
             resampled=True,
             handler=wds.ignore_and_continue,
         )
-        .shuffle(training_config.shuffle_buffer_size)
+        .shuffle(shuffle_buffer_size)
         .decode("pil", handler=wds.ignore_and_continue)
         .rename(
             image="jpg;png;jpeg;webp",
@@ -354,23 +361,21 @@ def get_sdxl_dataset():
             metadata="json",
             handler=wds.warn_and_continue,
         )
-        .map(make_sample)
+        .map(lambda d: make_sample(d, proportion_empty_prompts=proportion_empty_prompts, get_sdxl_conditioning_images=get_sdxl_conditioning_images))
+        .select(lambda sample: "conditioning_image" not in sample or sample["conditioning_image"] is not None)
     )
 
-    if training_config.training in ["sdxl_controlnet", "sdxl_adapter"]:
-        dataset = dataset.select(conditioning_image_is_not_none)
-
-    dataset = dataset.batched(training_config.batch_size, partial=False, collation_fn=default_collate)
+    dataset = dataset.batched(batch_size, partial=False, collation_fn=default_collate)
 
     return dataset
 
 
 @torch.no_grad()
-def make_sample(d):
+def make_sample(d, proportion_empty_prompts, get_sdxl_conditioning_images=None):
     image = d["image"]
     metadata = d["metadata"]
 
-    if random.random() < training_config.proportion_empty_prompts:
+    if random.random() < proportion_empty_prompts:
         text = ""
     else:
         text = d["text"]
@@ -380,16 +385,7 @@ def make_sample(d):
     original_width = int(metadata.get("original_width", 0.0))
     original_height = int(metadata.get("original_height", 0.0))
 
-    micro_conditioning = torch.tensor(
-        [
-            original_width,
-            original_height,
-            c_top,
-            c_left,
-            training_config.resolution,
-            training_config.resolution,
-        ]
-    )
+    micro_conditioning = torch.tensor([original_width, original_height, c_top, c_left, 1024, 1024])
 
     text_input_ids_one = sdxl_tokenize_one(text)
 
@@ -399,7 +395,7 @@ def make_sample(d):
 
     image = TF.resize(
         image,
-        training_config.resolution,
+        1024,
         interpolation=torchvision.transforms.InterpolationMode.BILINEAR,
     )
 
@@ -407,8 +403,8 @@ def make_sample(d):
         image,
         c_top,
         c_left,
-        training_config.resolution,
-        training_config.resolution,
+        1024,
+        1024,
     )
 
     sample = {
@@ -418,7 +414,7 @@ def make_sample(d):
         "image": TF.normalize(TF.to_tensor(image), [0.5], [0.5]),
     }
 
-    if training_config.training in ["sdxl_adapter", "sdxl_controlnet"]:
+    if get_sdxl_conditioning_images is not None:
         conditioning_images = get_sdxl_conditioning_images(image)
 
         sample["conditioning_image"] = conditioning_images["conditioning_image"]
@@ -446,69 +442,249 @@ def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, 
     return i, j, th, tw
 
 
-def conditioning_image_is_not_none(sample):
-    return sample["conditioning_image"] is not None
+class GetSDXLConditioningImages:
+    training: Literal["sdxl_adapter", "sdxl_unet", "sdxl_controlnet"]
+    adapter_type: Optional[Literal["openpose"]]
+    controlnet_type: Optional[Literal["canny", "inpainting"]]
+    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"]
+
+    @classmethod
+    def from_training_config(cls, training_config: Config):
+        return cls(training=training_config.training, controlnet_type=training_config.controlnet_type, controlnet_variant=training_config.controlnet_variant, adapter_type=training_config.adapter_type)
+
+    def __init__(
+        self,
+        training,
+        controlnet_type,
+        controlnet_variant,
+        adapter_type,
+    ):
+        self.training = training
+        self.controlnet_type = controlnet_type
+        self.controlnet_variant = controlnet_variant
+        self.adapter_type = adapter_type
+
+        if training == "sdxl_adapter" and self.adapter_type == "openpose":
+            from controlnet_aux import OpenposeDetector
+
+            self.open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+
+    def __call__(self, image):
+        resolution = image.width
+
+        if self.training == "sdxl_adapter" and self.adapter_type == "openpose":
+            conditioning_image = self.open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
+
+            if (conditioning_image == 0).all():
+                return None, None
+
+            conditioning_image_as_pil = Image.fromarray(conditioning_image)
+
+            conditioning_image = TF.to_tensor(conditioning_image)
+
+        if self.training == "sdxl_controlnet" and self.controlnet_type == "canny":
+            import cv2
+
+            conditioning_image = np.array(image)
+            conditioning_image = cv2.Canny(conditioning_image, 100, 200)
+            conditioning_image = conditioning_image[:, :, None]
+            conditioning_image = np.concatenate([conditioning_image, conditioning_image, conditioning_image], axis=2)
+
+            conditioning_image_as_pil = Image.fromarray(conditioning_image)
+
+            conditioning_image = TF.to_tensor(conditioning_image)
+
+        if self.training == "sdxl_controlnet" and self.controlnet_type == "inpainting" and self.controlnet_variant == "pre_encoded_controlnet_cond":
+            if random.random() <= 0.25:
+                conditioning_image_mask = np.ones((resolution, resolution), np.float32)
+            else:
+                conditioning_image_mask = random.choice([make_random_rectangle_mask, make_random_irregular_mask, make_outpainting_mask])(resolution, resolution)
+
+            conditioning_image_mask = torch.from_numpy(conditioning_image_mask)
+
+            conditioning_image_mask = conditioning_image_mask[None, :, :]
+
+            conditioning_image = TF.to_tensor(image)
+
+            if self.controlnet_variant == "pre_encoded_controlnet_cond":
+                # where mask is 1, zero out the pixels. Note that this requires mask to be concattenated
+                # with the mask so that the network knows the zeroed out pixels are from the mask and
+                # are not just zero in the original image
+                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5)
+
+                conditioning_image_as_pil = TF.to_pil_image(conditioning_image)
+
+                conditioning_image = TF.normalize(conditioning_image, [0.5], [0.5])
+            else:
+                # Just zero out the pixels which will be masked
+                conditioning_image_as_pil = TF.to_pil_image(conditioning_image * (conditioning_image_mask < 0.5))
+
+                # where mask is set to 1, set to -1 "special" masked image pixel.
+                # -1 is outside of the 0-1 range that the controlnet normalized
+                # input is in.
+                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask > 0.5)
+
+        return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
 
 
-if training_config.training == "sdxl_adapter" and training_config.adapter_type == "openpose":
-    from controlnet_aux import OpenposeDetector
+# TODO: would be nice to just call a function from a tokenizers https://github.com/huggingface/tokenizers
+# i.e. afaik tokenizing shouldn't require holding any state
 
-    open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+tokenizer_one = CLIPTokenizerFast.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer")
+
+tokenizer_two = CLIPTokenizerFast.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="tokenizer_2")
 
 
-def get_sdxl_conditioning_images(image):
-    resolution = image.width
+def sdxl_tokenize_one(prompts):
+    return tokenizer_one(
+        prompts,
+        padding="max_length",
+        max_length=tokenizer_one.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
 
-    if training_config.training == "sdxl_adapter" and training_config.adapter_type == "openpose":
-        conditioning_image = open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
 
-        if (conditioning_image == 0).all():
-            return None, None
+def sdxl_tokenize_two(prompts):
+    return tokenizer_two(
+        prompts,
+        padding="max_length",
+        max_length=tokenizer_one.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
 
-        conditioning_image_as_pil = Image.fromarray(conditioning_image)
 
-        conditioning_image = TF.to_tensor(conditioning_image)
+def sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two):
+    prompt_embeds_1 = text_encoder_one(
+        text_input_ids_one,
+        output_hidden_states=True,
+    ).hidden_states[-2]
 
-    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "canny":
-        import cv2
+    prompt_embeds_1 = prompt_embeds_1.view(prompt_embeds_1.shape[0], prompt_embeds_1.shape[1], -1)
 
-        conditioning_image = np.array(image)
-        conditioning_image = cv2.Canny(conditioning_image, 100, 200)
-        conditioning_image = conditioning_image[:, :, None]
-        conditioning_image = np.concatenate([conditioning_image, conditioning_image, conditioning_image], axis=2)
+    prompt_embeds_2 = text_encoder_two(
+        text_input_ids_two,
+        output_hidden_states=True,
+    )
 
-        conditioning_image_as_pil = Image.fromarray(conditioning_image)
+    pooled_encoder_hidden_states = prompt_embeds_2[0]
 
-        conditioning_image = TF.to_tensor(conditioning_image)
+    prompt_embeds_2 = prompt_embeds_2.hidden_states[-2]
 
-    if training_config.training == "sdxl_controlnet" and training_config.controlnet_type == "inpainting" and training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-        if random.random() <= 0.25:
-            conditioning_image_mask = np.ones((resolution, resolution), np.float32)
-        else:
-            conditioning_image_mask = random.choice([make_random_rectangle_mask, make_random_irregular_mask, make_outpainting_mask])(resolution, resolution)
+    prompt_embeds_2 = prompt_embeds_2.view(prompt_embeds_2.shape[0], prompt_embeds_2.shape[1], -1)
 
-        conditioning_image_mask = torch.from_numpy(conditioning_image_mask)
+    encoder_hidden_states = torch.cat((prompt_embeds_1, prompt_embeds_2), dim=-1)
 
-        conditioning_image_mask = conditioning_image_mask[None, :, :]
+    return encoder_hidden_states, pooled_encoder_hidden_states
 
-        conditioning_image = TF.to_tensor(image)
 
-        if training_config.controlnet_variant == "pre_encoded_controlnet_cond":
-            # where mask is 1, zero out the pixels. Note that this requires mask to be concattenated
-            # with the mask so that the network knows the zeroed out pixels are from the mask and
-            # are not just zero in the original image
-            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5)
+def make_random_rectangle_mask(
+    height,
+    width,
+    margin=10,
+    bbox_min_size=100,
+    bbox_max_size=512,
+    min_times=1,
+    max_times=2,
+):
+    mask = np.zeros((height, width), np.float32)
 
-            conditioning_image_as_pil = TF.to_pil_image(conditioning_image)
+    bbox_max_size = min(bbox_max_size, height - margin * 2, width - margin * 2)
 
-            conditioning_image = TF.normalize(conditioning_image, [0.5], [0.5])
-        else:
-            # Just zero out the pixels which will be masked
-            conditioning_image_as_pil = TF.to_pil_image(conditioning_image * (conditioning_image_mask < 0.5))
+    times = np.random.randint(min_times, max_times + 1)
 
-            # where mask is set to 1, set to -1 "special" masked image pixel.
-            # -1 is outside of the 0-1 range that the controlnet normalized
-            # input is in.
-            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask > 0.5)
+    for i in range(times):
+        box_width = np.random.randint(bbox_min_size, bbox_max_size)
+        box_height = np.random.randint(bbox_min_size, bbox_max_size)
 
-    return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
+        start_x = np.random.randint(margin, width - margin - box_width + 1)
+        start_y = np.random.randint(margin, height - margin - box_height + 1)
+
+        mask[start_y : start_y + box_height, start_x : start_x + box_width] = 1
+
+    return mask
+
+
+def make_random_irregular_mask(height, width, max_angle=4, max_len=60, max_width=256, min_times=1, max_times=2):
+    import cv2
+
+    mask = np.zeros((height, width), np.float32)
+
+    times = np.random.randint(min_times, max_times + 1)
+
+    for i in range(times):
+        start_x = np.random.randint(width)
+        start_y = np.random.randint(height)
+
+        for j in range(1 + np.random.randint(5)):
+            angle = 0.01 + np.random.randint(max_angle)
+
+            if i % 2 == 0:
+                angle = 2 * 3.1415926 - angle
+
+            length = 10 + np.random.randint(max_len)
+
+            brush_w = 5 + np.random.randint(max_width)
+
+            end_x = np.clip((start_x + length * np.sin(angle)).astype(np.int32), 0, width)
+            end_y = np.clip((start_y + length * np.cos(angle)).astype(np.int32), 0, height)
+
+            choice = random.randint(0, 2)
+
+            if choice == 0:
+                cv2.line(mask, (start_x, start_y), (end_x, end_y), 1.0, brush_w)
+            elif choice == 1:
+                cv2.circle(mask, (start_x, start_y), radius=brush_w, color=1.0, thickness=-1)
+            elif choice == 2:
+                radius = brush_w // 2
+                mask[
+                    start_y - radius : start_y + radius,
+                    start_x - radius : start_x + radius,
+                ] = 1
+            else:
+                assert False
+
+            start_x, start_y = end_x, end_y
+
+    return mask
+
+
+def make_outpainting_mask(height, width, probs=[0.5, 0.5, 0.5, 0.5]):
+    mask = np.zeros((height, width), np.float32)
+    at_least_one_mask_applied = False
+
+    coords = [
+        [(0, 0), (1, get_padding(height))],
+        [(0, 0), (get_padding(width), 1)],
+        [(0, 1 - get_padding(height)), (1, 1)],
+        [(1 - get_padding(width), 0), (1, 1)],
+    ]
+
+    for pp, coord in zip(probs, coords):
+        if np.random.random() < pp:
+            at_least_one_mask_applied = True
+            mask = apply_padding(mask=mask, coord=coord)
+
+    if not at_least_one_mask_applied:
+        idx = np.random.choice(range(len(coords)), p=np.array(probs) / sum(probs))
+        mask = apply_padding(mask=mask, coord=coords[idx])
+
+    return mask
+
+
+def get_padding(size, min_padding_percent=0.04, max_padding_percent=0.5):
+    n1 = int(min_padding_percent * size)
+    n2 = int(max_padding_percent * size)
+    return np.random.randint(n1, n2) / size
+
+
+def apply_padding(mask, coord):
+    height, width = mask.shape
+
+    mask[
+        int(coord[0][0] * height) : int(coord[1][0] * height),
+        int(coord[0][1] * width) : int(coord[1][1] * width),
+    ] = 1
+
+    return mask
