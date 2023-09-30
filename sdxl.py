@@ -23,7 +23,6 @@ from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
 from training_config import Config
-from utils import maybe_ddp_device, maybe_ddp_dtype, maybe_ddp_module
 
 
 class SDXLTraining:
@@ -182,8 +181,12 @@ class SDXLTraining:
 
     def train_step(self, batch):
         with torch.no_grad():
-            unet_dtype = maybe_ddp_dtype(self.unet)
-            unet_device = maybe_ddp_device(self.unet)
+            if isinstance(self.unet, DDP):
+                unet_dtype = self.unet.module.dtype
+                unet_device = self.unet.module.device
+            else:
+                unet_dtype = self.unet.dtype
+                unet_device = self.unet.device
 
             micro_conditioning = batch["micro_conditioning"].to(device=unet_device)
 
@@ -223,8 +226,8 @@ class SDXLTraining:
                 conditioning_image = batch["conditioning_image"].to(unet_device)
 
             if self.controlnet is not None and isinstance(self.controlnet, SDXLControlNetPreEncodedControlnetCond):
-                controlnet_device = maybe_ddp_device(self.controlnet)
-                controlnet_dtype = maybe_ddp_dtype(self.controlnet)
+                controlnet_device = self.controlnet.module.device
+                controlnet_dtype = self.controlnet.module.dtype
                 conditioning_image = self.vae.encode(conditioning_image.to(self.vae.dtype)).to(device=controlnet_device, dtype=controlnet_dtype)
                 conditioning_image_mask = TF.resize(batch["conditioning_image_mask"], conditioning_image.shape[2:]).to(device=controlnet_device, dtype=controlnet_dtype)
                 conditioning_image = torch.concat((conditioning_image, conditioning_image_mask), dim=1)
@@ -275,17 +278,22 @@ class SDXLTraining:
 
     @torch.no_grad()
     def log_validation(self, step, num_validation_images: int, validation_prompts: Optional[List[str]] = None, validation_images: Optional[List[str]] = None):
-        unet = maybe_ddp_module(self.unet)
-        unet.eval()
+        if isinstance(self.unet, DDP):
+            unet = self.unet.module
+            unet.eval()
+            unet_set_to_eval = True
+        else:
+            unet = self.unet
+            unet_set_to_eval = False
 
         if self.adapter is not None:
-            adapter = maybe_ddp_module(self.adapter)
+            adapter = self.adapter.module
             adapter.eval()
         else:
             adapter = None
 
         if self.controlnet is not None:
-            controlnet = maybe_ddp_module(self.controlnet)
+            controlnet = self.controlnet.module
             controlnet.eval()
         else:
             controlnet = None
@@ -342,7 +350,8 @@ class SDXLTraining:
 
         wandb.log({"validation": output_validation_images}, step=step)
 
-        unet.train()
+        if unet_set_to_eval:
+            unet.train()
 
         if adapter is not None:
             adapter.train()

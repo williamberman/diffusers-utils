@@ -9,8 +9,6 @@ import xformers
 from PIL import Image
 from torch import nn
 
-from utils import maybe_ddp_module
-
 
 class ModelUtils:
     @property
@@ -620,8 +618,6 @@ class SDXLControlNet(nn.Module, ModelUtils):
 
     @classmethod
     def from_unet(cls, unet):
-        unet = maybe_ddp_module(unet)
-
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())
@@ -798,8 +794,6 @@ class SDXLControlNetPreEncodedControlnetCond(nn.Module, ModelUtils):
 
     @classmethod
     def from_unet(cls, unet):
-        unet = maybe_ddp_module(unet)
-
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())
@@ -1097,8 +1091,6 @@ class SDXLControlNetFull(nn.Module, ModelUtils):
 
     @classmethod
     def from_unet(cls, unet):
-        unet = maybe_ddp_module(unet)
-
         controlnet = cls()
 
         controlnet.time_embedding.load_state_dict(unet.time_embedding.state_dict())
