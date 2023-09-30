@@ -37,7 +37,9 @@ def main():
     dist.init_process_group("nccl")
 
     get_sdxl_conditioning_images = GetSDXLConditioningImages.from_training_config(training_config)
+
     training = SDXLTraining.from_training_config(device=device, training_config=training_config, get_sdxl_conditioning_images=get_sdxl_conditioning_images)
+
     dataset = get_sdxl_dataset(
         train_shards=training_config.train_shards,
         shuffle_buffer_size=training_config.shuffle_buffer_size,
@@ -46,10 +48,20 @@ def main():
         get_sdxl_conditioning_images=get_sdxl_conditioning_images,
     )
 
-    training_loop(dataset=dataset, training=training)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=None,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=8,
+    )
+
+    training_loop(dataloader=dataloader, training=training)
 
 
-def training_loop(dataset, training):
+def training_loop(dataloader, training):
     if dist.get_rank() == 0:
         os.makedirs(training_config.output_dir, exist_ok=True)
 
@@ -71,16 +83,6 @@ def training_loop(dataset, training):
     progress_bar = tqdm(
         range(global_step, training_config.max_train_steps),
         disable=dist.get_rank() != 0,
-    )
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=None,
-        shuffle=False,
-        num_workers=8,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=8,
     )
 
     dataloader = iter(dataloader)
