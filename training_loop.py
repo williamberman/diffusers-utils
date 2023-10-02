@@ -58,7 +58,8 @@ class TrainingConfig:
 
 
 def main():
-    from sdxl import GetSDXLConditioningImages, SDXLTraining, get_sdxl_dataset
+    from sdxl import (SDXLTraining, get_sdxl_conditioning_images,
+                      get_sdxl_dataset)
     from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                              SDXLControlNetPreEncodedControlnetCond)
 
@@ -90,14 +91,22 @@ def main():
         if config.controlnet_type is None:
             raise ValueError('must set `controlnet_type` if `training` set to "sdxl_controlnet"')
 
-    get_sdxl_conditioning_images = GetSDXLConditioningImages(controlnet_type=controlnet_type, controlnet_variant=controlnet_variant, adapter_type=adapter_type)
+    if config.adapter_type == "openpose":
+        from controlnet_aux import OpenposeDetector
+
+        open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+    else:
+        open_pose = None
+    get_sdxl_conditioning_images_ = lambda image: get_sdxl_conditioning_images(
+        image=image, adapter_type=config.adapter_type, controlnet_type=config.controlnet_type, controlnet_variant=config.controlnet_variant, open_pose=open_pose
+    )
 
     dataset = get_sdxl_dataset(
         train_shards=config.train_shards,
         shuffle_buffer_size=config.shuffle_buffer_size,
         batch_size=config.batch_size,
         proportion_empty_prompts=config.proportion_empty_prompts,
-        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images_,
     )
 
     dataloader = DataLoader(

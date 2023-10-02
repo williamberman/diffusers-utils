@@ -443,82 +443,62 @@ def get_random_crop_params(input_size: Tuple[int, int], output_size: Tuple[int, 
     return i, j, th, tw
 
 
-class GetSDXLConditioningImages:
-    adapter_type: Optional[Literal["openpose"]]
-    controlnet_type: Optional[Literal["canny", "inpainting"]]
-    controlnet_variant: Literal["default", "full", "pre_encoded_controlnet_cond"]
+def get_sdxl_conditioning_images(image, adapter_type, controlnet_type, controlnet_variant, open_pose=None):
+    resolution = image.width
 
-    def __init__(
-        self,
-        controlnet_type,
-        controlnet_variant,
-        adapter_type,
-    ):
-        self.controlnet_type = controlnet_type
-        self.controlnet_variant = controlnet_variant
-        self.adapter_type = adapter_type
+    if adapter_type == "openpose":
+        conditioning_image = open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
 
-        if self.adapter_type == "openpose":
-            from controlnet_aux import OpenposeDetector
+        if (conditioning_image == 0).all():
+            return None, None
 
-            self.open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+        conditioning_image_as_pil = Image.fromarray(conditioning_image)
 
-    def __call__(self, image):
-        resolution = image.width
+        conditioning_image = TF.to_tensor(conditioning_image)
 
-        if self.adapter_type == "openpose":
-            conditioning_image = self.open_pose(image, detect_resolution=resolution, image_resolution=resolution, return_pil=False)
+    if controlnet_type == "canny":
+        import cv2
 
-            if (conditioning_image == 0).all():
-                return None, None
+        conditioning_image = np.array(image)
+        conditioning_image = cv2.Canny(conditioning_image, 100, 200)
+        conditioning_image = conditioning_image[:, :, None]
+        conditioning_image = np.concatenate([conditioning_image, conditioning_image, conditioning_image], axis=2)
 
-            conditioning_image_as_pil = Image.fromarray(conditioning_image)
+        conditioning_image_as_pil = Image.fromarray(conditioning_image)
 
-            conditioning_image = TF.to_tensor(conditioning_image)
+        conditioning_image = TF.to_tensor(conditioning_image)
 
-        if self.controlnet_type == "canny":
-            import cv2
+    if controlnet_type == "inpainting" and controlnet_variant == "pre_encoded_controlnet_cond":
+        if random.random() <= 0.25:
+            conditioning_image_mask = np.ones((resolution, resolution), np.float32)
+        else:
+            conditioning_image_mask = random.choice([make_random_rectangle_mask, make_random_irregular_mask, make_outpainting_mask])(resolution, resolution)
 
-            conditioning_image = np.array(image)
-            conditioning_image = cv2.Canny(conditioning_image, 100, 200)
-            conditioning_image = conditioning_image[:, :, None]
-            conditioning_image = np.concatenate([conditioning_image, conditioning_image, conditioning_image], axis=2)
+        conditioning_image_mask = torch.from_numpy(conditioning_image_mask)
 
-            conditioning_image_as_pil = Image.fromarray(conditioning_image)
+        conditioning_image_mask = conditioning_image_mask[None, :, :]
 
-            conditioning_image = TF.to_tensor(conditioning_image)
+        conditioning_image = TF.to_tensor(image)
 
-        if self.controlnet_type == "inpainting" and self.controlnet_variant == "pre_encoded_controlnet_cond":
-            if random.random() <= 0.25:
-                conditioning_image_mask = np.ones((resolution, resolution), np.float32)
-            else:
-                conditioning_image_mask = random.choice([make_random_rectangle_mask, make_random_irregular_mask, make_outpainting_mask])(resolution, resolution)
+        if controlnet_variant == "pre_encoded_controlnet_cond":
+            # where mask is 1, zero out the pixels. Note that this requires mask to be concattenated
+            # with the mask so that the network knows the zeroed out pixels are from the mask and
+            # are not just zero in the original image
+            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5)
 
-            conditioning_image_mask = torch.from_numpy(conditioning_image_mask)
+            conditioning_image_as_pil = TF.to_pil_image(conditioning_image)
 
-            conditioning_image_mask = conditioning_image_mask[None, :, :]
+            conditioning_image = TF.normalize(conditioning_image, [0.5], [0.5])
+        else:
+            # Just zero out the pixels which will be masked
+            conditioning_image_as_pil = TF.to_pil_image(conditioning_image * (conditioning_image_mask < 0.5))
 
-            conditioning_image = TF.to_tensor(image)
+            # where mask is set to 1, set to -1 "special" masked image pixel.
+            # -1 is outside of the 0-1 range that the controlnet normalized
+            # input is in.
+            conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask >= 0.5)
 
-            if self.controlnet_variant == "pre_encoded_controlnet_cond":
-                # where mask is 1, zero out the pixels. Note that this requires mask to be concattenated
-                # with the mask so that the network knows the zeroed out pixels are from the mask and
-                # are not just zero in the original image
-                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5)
-
-                conditioning_image_as_pil = TF.to_pil_image(conditioning_image)
-
-                conditioning_image = TF.normalize(conditioning_image, [0.5], [0.5])
-            else:
-                # Just zero out the pixels which will be masked
-                conditioning_image_as_pil = TF.to_pil_image(conditioning_image * (conditioning_image_mask < 0.5))
-
-                # where mask is set to 1, set to -1 "special" masked image pixel.
-                # -1 is outside of the 0-1 range that the controlnet normalized
-                # input is in.
-                conditioning_image = conditioning_image * (conditioning_image_mask < 0.5) + -1.0 * (conditioning_image_mask >= 0.5)
-
-        return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
+    return dict(conditioning_image=conditioning_image, conditioning_image_mask=conditioning_image_mask, conditioning_image_as_pil=conditioning_image_as_pil)
 
 
 # TODO: would be nice to just call a function from a tokenizers https://github.com/huggingface/tokenizers
