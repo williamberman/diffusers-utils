@@ -388,9 +388,9 @@ def make_sample(d, proportion_empty_prompts, get_sdxl_conditioning_images=None):
 
     micro_conditioning = torch.tensor([original_width, original_height, c_top, c_left, 1024, 1024])
 
-    text_input_ids_one = sdxl_tokenize_one(text)
+    text_input_ids_one = sdxl_tokenize_one(text)[0]
 
-    text_input_ids_two = sdxl_tokenize_two(text)
+    text_input_ids_two = sdxl_tokenize_two(text)[0]
 
     image = image.convert("RGB")
 
@@ -517,7 +517,7 @@ def sdxl_tokenize_one(prompts):
         max_length=tokenizer_one.model_max_length,
         truncation=True,
         return_tensors="pt",
-    ).input_ids[0]
+    ).input_ids
 
 
 def sdxl_tokenize_two(prompts):
@@ -527,7 +527,7 @@ def sdxl_tokenize_two(prompts):
         max_length=tokenizer_one.model_max_length,
         truncation=True,
         return_tensors="pt",
-    ).input_ids[0]
+    ).input_ids
 
 
 def sdxl_text_conditioning(text_encoder_one, text_encoder_two, text_input_ids_one, text_input_ids_two):
@@ -667,7 +667,7 @@ def apply_padding(mask, coord):
 
 @torch.no_grad()
 def sdxl_diffusion_loop(
-    prompts,
+    prompts: List[str],
     unet,
     text_encoder_one,
     text_encoder_two,
@@ -683,8 +683,10 @@ def sdxl_diffusion_loop(
     negative_prompts=None,
     diffusion_loop=euler_ode_solver_diffusion_loop,
 ):
+    batch_size = len(prompts)
+
     if negative_prompts is None:
-        negative_prompts = [""] * len(prompts)
+        negative_prompts = [""] * batch_size
 
     prompts += negative_prompts
 
@@ -694,27 +696,30 @@ def sdxl_diffusion_loop(
         sdxl_tokenize_one(prompts).to(text_encoder_one.device),
         sdxl_tokenize_two(prompts).to(text_encoder_two.device),
     )
-
-    if x_T is None:
-        x_T = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=torch.float32, device=unet.device, generator=generator)
-        x_T = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
+    encoder_hidden_states = encoder_hidden_states.to(unet.dtype)
+    pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(unet.dtype)
 
     if sigmas is None:
         sigmas = make_sigmas(device=unet.device)
+
+    if x_T is None:
+        x_T = torch.randn((batch_size, 4, 1024 // 8, 1024 // 8), dtype=unet.dtype, device=unet.device, generator=generator)
+        x_T = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
 
     if timesteps is None:
         timesteps = torch.linspace(0, sigmas.numel(), 50, dtype=torch.long, device=unet.device)
 
     if micro_conditioning is None:
-        micro_conditioning = torch.tensor([1024, 1024, 0, 0, 1024, 1024], dtype=torch.long, device=unet.device)
+        micro_conditioning = torch.tensor([[1024, 1024, 0, 0, 1024, 1024]], dtype=torch.long, device=unet.device)
+        micro_conditioning = micro_conditioning.expand(batch_size, -1)
 
     if adapter is not None:
-        down_block_additional_residuals = adapter(images)
+        down_block_additional_residuals = adapter(images.to(dtype=adapter.dtype, device=adapter.device))
     else:
         down_block_additional_residuals = None
 
     if controlnet is not None:
-        controlnet_cond = images
+        controlnet_cond = images.to(dtype=controlnet.dtype, device=controlnet.device)
     else:
         controlnet_cond = None
 
@@ -756,21 +761,28 @@ def sdxl_eps_theta(
 
     if guidance_scale > 1.0:
         scaled_x_t = torch.concat([scaled_x_t, scaled_x_t])
+        micro_conditioning = torch.concat([micro_conditioning, micro_conditioning])
+        if controlnet_cond is not None:
+            controlnet_cond = torch.concat([controlnet_cond, controlnet_cond])
 
     if controlnet is not None:
         controlnet_out = controlnet(
             x_t=scaled_x_t,
             t=t,
-            encoder_hidden_states=encoder_hidden_states,
-            micro_conditioning=micro_conditioning,
-            pooled_encoder_hidden_states=pooled_encoder_hidden_states,
+            encoder_hidden_states=encoder_hidden_states.to(controlnet.dtype),
+            micro_conditioning=micro_conditioning.to(controlnet.dtype),
+            pooled_encoder_hidden_states=pooled_encoder_hidden_states.to(controlnet.dtype),
             controlnet_cond=controlnet_cond,
         )
 
-        down_block_additional_residuals = controlnet_out["down_block_res_samples"]
-        mid_block_additional_residual = controlnet_out["mid_block_res_sample"]
+        down_block_additional_residuals = [x.to(unet.dtype) for x in controlnet_out["down_block_res_samples"]]
+        mid_block_additional_residual = controlnet_out["mid_block_res_sample"].to(unet.dtype)
         add_to_down_block_inputs = controlnet_out.get("add_to_down_block_inputs", None)
+        if add_to_down_block_inputs is not None:
+            add_to_down_block_inputs = [x.to(unet.dtype) for x in add_to_down_block_inputs]
         add_to_output = controlnet_out.get("add_to_output", None)
+        if add_to_output is not None:
+            add_to_output = add_to_output.to(unet.dtype)
     else:
         mid_block_additional_residual = None
         add_to_down_block_inputs = None
@@ -799,9 +811,10 @@ def sdxl_eps_theta(
 known_negative_prompt = "text, watermark, low-quality, signature, moiré pattern, downsampling, aliasing, distorted, blurry, glossy, blur, jpeg artifacts, compression artifacts, poorly drawn, low-resolution, bad, distortion, twisted, excessive, exaggerated pose, exaggerated limbs, grainy, symmetrical, duplicate, error, pattern, beginner, pixelated, fake, hyper, glitch, overexposed, high-contrast, bad-contrast"
 
 
+# TODO probably just combine with sdxl_diffusion_loop
 def gen_sdxl_simplified_interface(
-    prompt: str,
-    negative_prompt: Optional[str] = None,
+    prompts: Union[str, List[str]],
+    negative_prompts: Optional[Union[str, List[str]]] = None,
     controlnet_checkpoint: Optional[str] = None,
     controlnet: Optional[Literal["SDXLControlNet", "SDXLContolNetFull", "SDXLControlNetPreEncodedControlnetCond"]] = None,
     adapter_checkpoint: Optional[str] = None,
@@ -810,6 +823,7 @@ def gen_sdxl_simplified_interface(
     masks=None,
     apply_conditioning: Optional[Literal["canny"]] = None,
     num_images: int = 1,
+    guidance_scale=5.0,
     device: Optional[str] = None,
     text_encoder_one=None,
     text_encoder_two=None,
@@ -888,22 +902,23 @@ def gen_sdxl_simplified_interface(
                 mask = masks[image_idx]
                 if isinstance(mask, str):
                     mask = Image.open(mask)
-                    mask = mask.convert("L")
-                    mask = mask.resize((1024, 1024))
                 elif isinstance(mask, Image.Image):
                     ...
                 else:
                     assert False
+                mask = mask.convert("L")
+                mask = mask.resize((1024, 1024))
                 mask = TF.to_tensor(mask)
 
-                if controlnet == "SDXLControlNetPreEncodedControlnetCond":
+                if isinstance(controlnet, SDXLControlNetPreEncodedControlnetCond):
                     image = image * (mask < 0.5)
-                    image = TF.normalized(image, [0.5], [0.5])
-                    image = vae.encode(image)
-                    mask = TF.resize(mask, (1024 // 8, 1024 // 8))
-                    image = torch.concat((image, mask))
+                    image = TF.normalize(image, [0.5], [0.5])
+                    image = vae.encode(image[None, :, :, :].to(dtype=vae.dtype, device=vae.device)).to(dtype=unet.dtype, device=unet.device)
+                    mask = TF.resize(mask, (1024 // 8, 1024 // 8))[None, :, :, :].to(dtype=image.dtype, device=image.device)
+                    image = torch.concat((image, mask), dim=1)
                 else:
-                    image = image * (mask < 0.5) + -1.0 * (mask >= 0.5)
+                    image = (image * (mask < 0.5) + -1.0 * (mask >= 0.5)).to(dtype=unet.dtype, device=unet.device)
+                    image = image[None, :, :, :]
 
             images_.append(image)
 
@@ -911,9 +926,24 @@ def gen_sdxl_simplified_interface(
     else:
         images_ = None
 
+    if isinstance(prompts, str):
+        prompts = [prompts]
+    prompts_ = []
+    for prompt in prompts:
+        prompts_ += [prompt] * num_images
+
+    if negative_prompts is not None:
+        if isinstance(negative_prompts, str):
+            negative_prompts = [negative_prompts]
+        negative_prompts_ = []
+        for negative_prompt in negative_prompts:
+            negative_prompts_ += [negative_prompt] * num_images
+    else:
+        negative_prompts_ = None
+
     x_0 = sdxl_diffusion_loop(
-        prompts=[prompt] * num_images,
-        negative_prompts=[negative_prompt] * num_images,
+        prompts=prompts_,
+        negative_prompts=negative_prompts_,
         unet=unet,
         text_encoder_one=text_encoder_one,
         text_encoder_two=text_encoder_two,
@@ -922,9 +952,10 @@ def gen_sdxl_simplified_interface(
         controlnet=controlnet,
         adapter=adapter,
         images=images_,
+        guidance_scale=guidance_scale,
     )
 
-    x_0 = vae.decode(x_0)
+    x_0 = vae.decode(x_0.to(vae.dtype))
     x_0 = vae.output_tensor_to_pil(x_0)
 
     return x_0
