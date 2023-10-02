@@ -9,7 +9,6 @@ from typing import Dict, List, Literal, Optional
 import safetensors.torch
 import torch
 import torch.distributed as dist
-import wandb
 import yaml
 from bitsandbytes.optim import AdamW8bit
 from torch.cuda.amp.grad_scaler import GradScaler
@@ -17,6 +16,8 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+import wandb
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

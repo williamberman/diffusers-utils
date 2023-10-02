@@ -62,17 +62,17 @@ class SDXLVae(nn.Module, ModelUtils):
                 # 128 -> 128
                 nn.ModuleDict(dict(
                     resnets=nn.ModuleList([ResnetBlock2D(128, 128, eps=1e-6), ResnetBlock2D(128, 128, eps=1e-6)]),
-                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)))]),
+                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(128, 128, kernel_size=3, stride=2)))]),
                 )),
                 # 128 -> 256
                 nn.ModuleDict(dict(
                     resnets=nn.ModuleList([ResnetBlock2D(128, 256, eps=1e-6), ResnetBlock2D(256, 256, eps=1e-6)]),
-                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)))]),
+                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(256, 256, kernel_size=3, stride=2)))]),
                 )),
                 # 256 -> 512
                 nn.ModuleDict(dict(
                     resnets=nn.ModuleList([ResnetBlock2D(256, 512, eps=1e-6), ResnetBlock2D(512, 512, eps=1e-6)]),
-                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)))]),
+                    downsamplers=nn.ModuleList([nn.ModuleDict(dict(conv=nn.Conv2d(512, 512, kernel_size=3, stride=2)))]),
                 )),
                 # 512 -> 512
                 nn.ModuleDict(dict(resnets=nn.ModuleList([ResnetBlock2D(512, 512, eps=1e-6), ResnetBlock2D(512, 512, eps=1e-6)]))),
@@ -151,6 +151,7 @@ class SDXLVae(nn.Module, ModelUtils):
                 h = resnet(h)
 
             if "downsamplers" in down_block:
+                h = F.pad(h, pad=(0, 1, 0, 1), mode="constant", value=0)
                 h = down_block["downsamplers"][0]["conv"](h)
 
         h = self.encoder["mid_block"]["resnets"][0](h)
@@ -1333,49 +1334,38 @@ class Attention(nn.Module):
         self.to_out = nn.Sequential(nn.Linear(channels, channels), nn.Dropout(0.0))
 
     def forward(self, hidden_states, encoder_hidden_states=None):
-        input_ndim = hidden_states.ndim
-
-        if input_ndim == 4:
-            batch_size, channels, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channels, height * width).transpose(1, 2)
-
-        hidden_states = attention(self.to_q, self.to_k, self.to_v, self.to_out, hidden_states, encoder_hidden_states)
-
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(1, 2).view(batch_size, channels, height, width)
-
-        return hidden_states
+        return attention(self.to_q, self.to_k, self.to_v, self.to_out, 64, hidden_states, encoder_hidden_states)
 
 
 class VaeMidBlockAttention(nn.Module):
     def __init__(self, channels):
         super().__init__()
         self.group_norm = nn.GroupNorm(32, channels, eps=1e-06)
-        self.to_q = nn.Linear(channels, channels, bias=True)
-        self.to_k = nn.Linear(channels, channels, bias=True)
-        self.to_v = nn.Linear(channels, channels, bias=True)
+        self.to_q = nn.Linear(channels, channels)
+        self.to_k = nn.Linear(channels, channels)
+        self.to_v = nn.Linear(channels, channels)
         self.to_out = nn.Sequential(nn.Linear(channels, channels), nn.Dropout(0.0))
+        self.head_dim = channels
 
     def forward(self, hidden_states):
-        input_ndim = hidden_states.ndim
+        residual = hidden_states
 
-        if input_ndim == 4:
-            batch_size, channels, height, width = hidden_states.shape
-            hidden_states = hidden_states.view(batch_size, channels, height * width).transpose(1, 2)
+        batch_size, channels, height, width = hidden_states.shape
+        hidden_states = hidden_states.view(batch_size, channels, height * width).transpose(1, 2)
 
         hidden_states = self.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        hidden_states = attention(self.to_q, self.to_k, self.to_v, self.to_out, hidden_states)
+        hidden_states = attention(self.to_q, self.to_k, self.to_v, self.to_out, self.head_dim, hidden_states)
 
-        if input_ndim == 4:
-            hidden_states = hidden_states.transpose(1, 2).view(batch_size, channels, height, width)
+        hidden_states = hidden_states.transpose(1, 2).view(batch_size, channels, height, width)
+
+        hidden_states = hidden_states + residual
 
         return hidden_states
 
 
-def attention(to_q, to_k, to_v, to_out, hidden_states, encoder_hidden_states=None):
+def attention(to_q, to_k, to_v, to_out, head_dim, hidden_states, encoder_hidden_states=None):
     batch_size, q_seq_len, channels = hidden_states.shape
-    head_dim = 64
 
     if encoder_hidden_states is not None:
         kv = encoder_hidden_states
