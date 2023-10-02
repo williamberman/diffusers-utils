@@ -26,7 +26,8 @@ class ModelUtils:
 
         load_from = [load_from]
 
-        load_from += overrides
+        if overrides is not None:
+            load_from += overrides
 
         state_dict = {}
 
@@ -79,7 +80,7 @@ class SDXLVae(nn.Module, ModelUtils):
 
             # 512 -> 512
             mid_block=nn.ModuleDict(dict(
-                attentions=nn.ModuleList([Attention(512, 512, qkv_bias=True)]),
+                attentions=nn.ModuleList([VaeMidBlockAttention(512)]),
                 resnets=nn.ModuleList([ResnetBlock2D(512, 512, eps=1e-6), ResnetBlock2D(512, 512, eps=1e-6)]),
             )),
 
@@ -103,7 +104,7 @@ class SDXLVae(nn.Module, ModelUtils):
 
             # 512 -> 512
             mid_block=nn.ModuleDict(dict(
-                attentions=nn.ModuleList([Attention(512, 512, qkv_bias=True)]),
+                attentions=nn.ModuleList([VaeMidBlockAttention(512)]),
                 resnets=nn.ModuleList([ResnetBlock2D(512, 512, eps=1e-6), ResnetBlock2D(512, 512, eps=1e-6)]),
             )),
 
@@ -1331,32 +1332,50 @@ class Attention(nn.Module):
         self.to_out = nn.Sequential(nn.Linear(channels, channels), nn.Dropout(0.0))
 
     def forward(self, hidden_states, encoder_hidden_states=None):
-        batch_size, q_seq_len, channels = hidden_states.shape
-        head_dim = 64
+        return attention(self.to_q, self.to_k, self.to_v, self.to_out, hidden_states, encoder_hidden_states)
 
-        if encoder_hidden_states is not None:
-            kv = encoder_hidden_states
-        else:
-            kv = hidden_states
 
-        kv_seq_len = kv.shape[1]
+class VaeMidBlockAttention(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.group_norm = nn.GroupNorm(32, channels, eps=1e-06)
+        self.to_q = nn.Linear(channels, channels, bias=True)
+        self.to_k = nn.Linear(channels, channels, bias=True)
+        self.to_v = nn.Linear(channels, channels, bias=True)
+        self.to_out = nn.Sequential(nn.Linear(channels, channels), nn.Dropout(0.0))
 
-        query = self.to_q(hidden_states)
-        key = self.to_k(kv)
-        value = self.to_v(kv)
+    def forward(self, hidden_states):
+        hidden_states = self.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+        return attention(self.to_q, self.to_k, self.to_v, self.to_out, hidden_states)
 
-        query = query.reshape(batch_size, q_seq_len, channels // head_dim, head_dim).contiguous()
-        key = key.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
-        value = value.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
 
-        hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
+def attention(to_q, to_k, to_v, to_out, hidden_states, encoder_hidden_states=None):
+    batch_size, q_seq_len, channels = hidden_states.shape
+    head_dim = 64
 
-        hidden_states = hidden_states.to(query.dtype)
-        hidden_states = hidden_states.reshape(batch_size, q_seq_len, channels).contiguous()
+    if encoder_hidden_states is not None:
+        kv = encoder_hidden_states
+    else:
+        kv = hidden_states
 
-        hidden_states = self.to_out(hidden_states)
+    kv_seq_len = kv.shape[1]
 
-        return hidden_states
+    query = to_q(hidden_states)
+    key = to_k(kv)
+    value = to_v(kv)
+
+    query = query.reshape(batch_size, q_seq_len, channels // head_dim, head_dim).contiguous()
+    key = key.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
+    value = value.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
+
+    hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
+
+    hidden_states = hidden_states.to(query.dtype)
+    hidden_states = hidden_states.reshape(batch_size, q_seq_len, channels).contiguous()
+
+    hidden_states = to_out(hidden_states)
+
+    return hidden_states
 
 
 class GEGLU(nn.Module):

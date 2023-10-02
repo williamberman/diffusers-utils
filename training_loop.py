@@ -97,8 +97,8 @@ def main():
         open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
     else:
         open_pose = None
-    get_sdxl_conditioning_images_ = lambda image: get_sdxl_conditioning_images(
-        image=image, adapter_type=config.adapter_type, controlnet_type=config.controlnet_type, controlnet_variant=config.controlnet_variant, open_pose=open_pose
+    get_sdxl_conditioning_images_ = lambda *args, **kwargs: get_sdxl_conditioning_images(
+        *args, **kwargs, adapter_type=config.adapter_type, controlnet_type=config.controlnet_type, controlnet_variant=config.controlnet_variant, open_pose=open_pose
     )
 
     dataset = get_sdxl_dataset(
