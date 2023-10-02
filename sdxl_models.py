@@ -191,6 +191,7 @@ class SDXLVae(nn.Module, ModelUtils):
                 h = resnet(h)
 
             if "upsamplers" in up_block:
+                h = F.interpolate(h, scale_factor=2.0, mode="nearest")
                 h = up_block["upsamplers"][0]["conv"](h)
 
         h = self.decoder["conv_norm_out"](h)
@@ -211,9 +212,7 @@ class SDXLVae(nn.Module, ModelUtils):
 
     @classmethod
     def output_tensor_to_pil(self, x_pred):
-        x_pred = ((x_pred * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8).permute(0, 2, 3, 1)
-
-        x_pred = x_pred.permute(0, 2, 3, 1).cpu().numpy()
+        x_pred = ((x_pred * 0.5 + 0.5).clamp(0, 1) * 255).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
 
         x_pred = [Image.fromarray(x) for x in x_pred]
 
