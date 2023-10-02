@@ -17,8 +17,8 @@ from torch.utils.data import default_collate
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
-from diffusion import (default_num_train_timesteps, make_sigmas,
-                       ode_solver_diffusion_loop)
+from diffusion import (default_num_train_timesteps,
+                       euler_ode_solver_diffusion_loop, make_sigmas)
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
                          SDXLVae)
@@ -700,6 +700,7 @@ def sdxl_diffusion_loop(
     guidance_scale=5.0,
     generator=None,
     negative_prompts=None,
+    diffusion_loop=euler_ode_solver_diffusion_loop,
 ):
     if negative_prompts is None:
         negative_prompts = [""] * len(prompts)
@@ -750,7 +751,7 @@ def sdxl_diffusion_loop(
         down_block_additional_residuals=down_block_additional_residuals,
     )
 
-    x_0 = ode_solver_diffusion_loop(eps_theta=eps_theta, timesteps=timesteps, sigmas=sigmas, x_T=x_T)
+    x_0 = diffusion_loop(eps_theta=eps_theta, timesteps=timesteps, sigmas=sigmas, x_T=x_T)
 
     return x_0
 
