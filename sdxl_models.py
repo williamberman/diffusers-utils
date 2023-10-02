@@ -6,7 +6,7 @@ import safetensors.torch
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-import xformers
+import xformers.ops
 from PIL import Image
 from torch import nn
 

@@ -1,10 +1,12 @@
 from PIL import Image
+import torch
 
 from sdxl_models import SDXLVae
 
 
 def main():
     vae = SDXLVae.load_fp16_fix(device="cuda")
+    vae.to(dtype=torch.float16)
 
     image = Image.open("./validation_data/two_birds_on_branch.png")
     image = image.convert("RGB")
@@ -12,7 +14,7 @@ def main():
     image = vae.input_pil_to_tensor(image)
     image = image.to(device=vae.device, dtype=vae.dtype)
 
-    image = vae(image)
+    image = vae.decode(vae.encode(image))
     image = vae.output_tensor_to_pil(image)[0]
 
     image.save("./out.png")
