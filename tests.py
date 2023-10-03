@@ -84,7 +84,7 @@ def test_sdxl_vae():
     expected_decoder_output = vae_.decode(expected_encoder_output / vae_.config.scaling_factor).sample
 
     total_diff = (expected_decoder_output.float() - decoder_output.float()).abs().sum()
-    assert total_diff < 650  # TODO
+    assert total_diff == 0
 
 
 @torch.no_grad()
