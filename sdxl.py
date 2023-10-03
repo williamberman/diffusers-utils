@@ -685,10 +685,8 @@ def sdxl_diffusion_loop(
 ):
     batch_size = len(prompts)
 
-    if negative_prompts is None:
-        negative_prompts = [""] * batch_size
-
-    prompts += negative_prompts
+    if negative_prompts is not None and guidance_scale > 1.0:
+        prompts += negative_prompts
 
     encoder_hidden_states, pooled_encoder_hidden_states = sdxl_text_conditioning(
         text_encoder_one,
@@ -699,15 +697,19 @@ def sdxl_diffusion_loop(
     encoder_hidden_states = encoder_hidden_states.to(unet.dtype)
     pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(unet.dtype)
 
+    if negative_prompts is None and guidance_scale > 1.0:
+        encoder_hidden_states = torch.concat([encoder_hidden_states, torch.zeros_like(encoder_hidden_states)])
+        pooled_encoder_hidden_states = torch.concat([pooled_encoder_hidden_states, torch.zeros_like(pooled_encoder_hidden_states)])
+
     if sigmas is None:
         sigmas = make_sigmas(device=unet.device)
 
-    if x_T is None:
-        x_T = torch.randn((batch_size, 4, 1024 // 8, 1024 // 8), dtype=unet.dtype, device=unet.device, generator=generator)
-        x_T = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
-
     if timesteps is None:
         timesteps = torch.linspace(0, sigmas.numel() - 1, 50, dtype=torch.long, device=unet.device)
+
+    if x_T is None:
+        x_T = torch.randn((batch_size, 4, 1024 // 8, 1024 // 8), dtype=unet.dtype, device=unet.device, generator=generator)
+        x_T = x_T * ((sigmas[timesteps[-1]] ** 2 + 1) ** 0.5)
 
     if micro_conditioning is None:
         micro_conditioning = torch.tensor([[1024, 1024, 0, 0, 1024, 1024]], dtype=torch.long, device=unet.device)
