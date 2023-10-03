@@ -784,7 +784,7 @@ def sdxl_eps_theta(
 
     if controlnet is not None:
         controlnet_out = controlnet(
-            x_t=scaled_x_t,
+            x_t=scaled_x_t.to(controlnet.dtype),
             t=t,
             encoder_hidden_states=encoder_hidden_states.to(controlnet.dtype),
             micro_conditioning=micro_conditioning.to(controlnet.dtype),

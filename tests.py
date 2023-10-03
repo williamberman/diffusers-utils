@@ -130,7 +130,7 @@ def test_sdxl_unet():
 
 @torch.no_grad()
 def test_text_to_image():
-    sigmas = make_sigmas(device=unet.device)
+    sigmas = make_sigmas(device=unet.device).to(dtype=unet.dtype)
     # fmt: off
     timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
     # fmt: on
@@ -172,7 +172,7 @@ def test_controlnet():
     else:
         assert False
 
-    sigmas = make_sigmas(device=unet.device)
+    sigmas = make_sigmas(device=unet.device).to(dtype=unet.dtype)
     # fmt: off
     timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
     # fmt: on
@@ -204,7 +204,7 @@ def test_controlnet_pre_encoded_controlnet_cond():
     controlnet = SDXLControlNetPreEncodedControlnetCond.load("./weights/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_checkpoint_200000.safetensors", device=device)
     controlnet.to(dtype=dtype)
 
-    sigmas = make_sigmas(device=unet.device)
+    sigmas = make_sigmas(device=unet.device).to(dtype=unet.dtype)
     # fmt: off
     timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
     # fmt: on
