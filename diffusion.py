@@ -21,8 +21,7 @@ def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_wei
     x_t = x_T
 
     for i in range(len(timesteps) - 1, -1, -1):
-        t = timesteps[i]
-
+        t = timesteps[i].unsqueeze(0)
         sigma = sigmas[t]
 
         if i == 0:

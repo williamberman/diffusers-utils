@@ -10,6 +10,9 @@ from sdxl import (sdxl_diffusion_loop, sdxl_text_conditioning,
 from sdxl_models import AttentionMixin, SDXLUNet, SDXLVae
 
 AttentionMixin.attention_implementation = "torch_2.0_scaled_dot_product"
+torch.backends.cuda.enable_math_sdp(True)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_mem_efficient_sdp(False)
 
 device = "cuda"
 dtype = torch.float32
@@ -101,7 +104,7 @@ def test_sdxl_unet():
 
     x_t = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=unet.dtype, device=unet.device, generator=torch.Generator(device).manual_seed(0))
 
-    t = torch.tensor(500, dtype=torch.long, device=device)
+    t = torch.tensor([500], dtype=torch.long, device=device)
 
     unet_output = unet(
         x_t=x_t,
@@ -117,7 +120,7 @@ def test_sdxl_unet():
 
     total_diff = (expected_unet_output.float() - unet_output.float()).abs().sum()
 
-    assert total_diff < 12
+    assert total_diff == 0
 
 
 def test_text_to_image():
