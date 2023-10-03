@@ -1,3 +1,5 @@
+import numpy as np
+import scipy
 import torch
 from diffusers import (AutoencoderKL, StableDiffusionXLPipeline,
                        UNet2DConditionModel)
@@ -141,11 +143,18 @@ def test_text_to_image():
         x_T=x_T_,
         timesteps=timesteps,
         sigmas=sigmas,
-        guidance_scale=5.0,
     )
-    vae.output_tensor_to_pil(vae.decode(out))[0]
+    out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out = np.array(out).astype(np.int32)
 
-    sdxl_pipe(prompt="horse", latents=x_T, guidance_scale=5.0)
+    expected_out = sdxl_pipe(prompt="horse", latents=x_T).images[0]
+    expected_out = np.array(expected_out).astype(np.int32)
+
+    diff = np.abs(out - expected_out).flatten()
+    diff.sort()
+
+    assert scipy.stats.mode(diff).mode == 1
+    assert diff.mean() < 1
 
 
 if __name__ == "__main__":

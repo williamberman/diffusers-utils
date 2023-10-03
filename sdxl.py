@@ -697,9 +697,16 @@ def sdxl_diffusion_loop(
     encoder_hidden_states = encoder_hidden_states.to(unet.dtype)
     pooled_encoder_hidden_states = pooled_encoder_hidden_states.to(unet.dtype)
 
-    if negative_prompts is None and guidance_scale > 1.0:
-        encoder_hidden_states = torch.concat([encoder_hidden_states, torch.zeros_like(encoder_hidden_states)])
-        pooled_encoder_hidden_states = torch.concat([pooled_encoder_hidden_states, torch.zeros_like(pooled_encoder_hidden_states)])
+    if guidance_scale > 1.0:
+        if negative_prompts is None:
+            negative_encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
+            negative_pooled_encoder_hidden_states = torch.zeros_like(pooled_encoder_hidden_states)
+        else:
+            encoder_hidden_states, negative_encoder_hidden_states = torch.chunk(encoder_hidden_states, 2)
+            pooled_encoder_hidden_states, negative_pooled_encoder_hidden_states = torch.chunk(pooled_encoder_hidden_states, 2)
+    else:
+        negative_encoder_hidden_states = None
+        negative_pooled_encoder_hidden_states = None
 
     if sigmas is None:
         sigmas = make_sigmas(device=unet.device)
@@ -731,6 +738,8 @@ def sdxl_diffusion_loop(
         unet=unet,
         encoder_hidden_states=encoder_hidden_states,
         pooled_encoder_hidden_states=pooled_encoder_hidden_states,
+        negative_encoder_hidden_states=negative_encoder_hidden_states,
+        negative_pooled_encoder_hidden_states=negative_pooled_encoder_hidden_states,
         micro_conditioning=micro_conditioning,
         guidance_scale=guidance_scale,
         controlnet=controlnet,
@@ -751,6 +760,8 @@ def sdxl_eps_theta(
     unet,
     encoder_hidden_states,
     pooled_encoder_hidden_states,
+    negative_encoder_hidden_states,
+    negative_pooled_encoder_hidden_states,
     micro_conditioning,
     guidance_scale,
     controlnet=None,
@@ -762,7 +773,12 @@ def sdxl_eps_theta(
 
     if guidance_scale > 1.0:
         scaled_x_t = torch.concat([scaled_x_t, scaled_x_t])
+
+        encoder_hidden_states = torch.concat((encoder_hidden_states, negative_encoder_hidden_states))
+        pooled_encoder_hidden_states = torch.concat((pooled_encoder_hidden_states, negative_pooled_encoder_hidden_states))
+
         micro_conditioning = torch.concat([micro_conditioning, micro_conditioning])
+
         if controlnet_cond is not None:
             controlnet_cond = torch.concat([controlnet_cond, controlnet_cond])
 
@@ -802,7 +818,7 @@ def sdxl_eps_theta(
     )
 
     if guidance_scale > 1.0:
-        eps_hat_uncond, eps_hat = eps_hat.chunk(2)
+        eps_hat, eps_hat_uncond = eps_hat.chunk(2)
 
         eps_hat = eps_hat_uncond + guidance_scale * (eps_hat - eps_hat_uncond)
 
