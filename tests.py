@@ -10,7 +10,9 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 from diffusion import make_sigmas
 from sdxl import (sdxl_diffusion_loop, sdxl_text_conditioning,
                   sdxl_tokenize_one, sdxl_tokenize_two)
-from sdxl_models import AttentionMixin, SDXLControlNet, SDXLUNet, SDXLVae
+from sdxl_models import (AttentionMixin, SDXLControlNet,
+                         SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
+                         SDXLVae)
 
 AttentionMixin.attention_implementation = "torch_2.0_scaled_dot_product"
 torch.backends.cuda.enable_math_sdp(True)
@@ -184,7 +186,42 @@ def test_controlnet():
     image = TF.to_tensor(image)[None, :, :, :].to(device=device, dtype=controlnet.dtype)
 
     out = sdxl_diffusion_loop(
-        ["horse"],
+        ["a beautiful room"],
+        unet=unet,
+        text_encoder_one=text_encoder_one,
+        text_encoder_two=text_encoder_two,
+        generator=torch.Generator(device).manual_seed(0),
+        x_T=x_T_,
+        timesteps=timesteps,
+        sigmas=sigmas,
+        controlnet=controlnet,
+        images=image,
+    )
+    out = vae.output_tensor_to_pil(vae.decode(out))[0]
+
+
+def test_controlnet_pre_encoded_controlnet_cond():
+    controlnet = SDXLControlNetPreEncodedControlnetCond.load("./weights/sdxl_controlnet_inpaint_pre_encoded_controlnet_cond_checkpoint_200000.safetensors", device=device)
+    controlnet.to(dtype=dtype)
+
+    sigmas = make_sigmas(device=unet.device)
+    # fmt: off
+    timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
+    # fmt: on
+
+    x_T = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=dtype, device=unet_.device, generator=torch.Generator(device).manual_seed(0))
+    x_T_ = x_T * ((sigmas[timesteps[-1]] ** 2 + 1) ** 0.5)
+
+    image = TF.to_tensor(Image.open("./validation_data/dog_sitting_on_bench.png").convert("RGB").resize((1024, 1024)))
+    mask = TF.to_tensor(Image.open("./validation_data/dog_sitting_on_bench_mask.png").convert("L").resize((1024, 1024)))
+    image = image * (mask < 0.5)
+    image = TF.normalize(image, [0.5], [0.5])
+    image = vae.encode(image[None, :, :, :].to(dtype=vae.dtype, device=vae.device)).to(dtype=controlnet.dtype, device=controlnet.device)
+    mask = TF.resize(mask, (1024 // 8, 1024 // 8))[None, :, :, :].to(dtype=image.dtype, device=image.device)
+    image = torch.concat((image, mask), dim=1)
+
+    out = sdxl_diffusion_loop(
+        ["a green lion sitting on a bench"],
         unet=unet,
         text_encoder_one=text_encoder_one,
         text_encoder_two=text_encoder_two,
@@ -203,3 +240,4 @@ if __name__ == "__main__":
     test_sdxl_unet()
     test_text_to_image()
     test_controlnet()
+    test_controlnet_pre_encoded_controlnet_cond()
