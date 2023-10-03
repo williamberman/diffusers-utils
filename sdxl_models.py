@@ -1,6 +1,6 @@
 import math
 import os
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import safetensors.torch
 import torch
@@ -1246,16 +1246,14 @@ class ResnetBlock2D(nn.Module):
     def forward(self, hidden_states, temb=None):
         residual = hidden_states
 
-        if self.time_emb_proj is not None:
-            assert temb is not None
-            temb = self.nonlinearity(temb)
-            temb = self.time_emb_proj(temb)[:, :, None, None]
-
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
         hidden_states = self.conv1(hidden_states)
 
-        if temb is not None:
+        if self.time_emb_proj is not None:
+            assert temb is not None
+            temb = self.nonlinearity(temb)
+            temb = self.time_emb_proj(temb)[:, :, None, None]
             hidden_states = hidden_states + temb
 
         hidden_states = self.norm2(hidden_states)
@@ -1325,7 +1323,51 @@ class TransformerDecoderBlock(nn.Module):
         return hidden_states
 
 
-class Attention(nn.Module):
+class AttentionMixin:
+    attention_implementation: Literal["xformers", "torch_2.0_scaled_dot_product"] = "xformers"
+
+    @classmethod
+    def attention(cls, to_q, to_k, to_v, to_out, head_dim, hidden_states, encoder_hidden_states=None):
+        batch_size, q_seq_len, channels = hidden_states.shape
+
+        if encoder_hidden_states is not None:
+            kv = encoder_hidden_states
+        else:
+            kv = hidden_states
+
+        kv_seq_len = kv.shape[1]
+
+        query = to_q(hidden_states)
+        key = to_k(kv)
+        value = to_v(kv)
+
+        if AttentionMixin.attention_implementation == "xformers":
+            query = query.reshape(batch_size, q_seq_len, channels // head_dim, head_dim).contiguous()
+            key = key.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
+            value = value.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
+
+            hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
+
+            hidden_states = hidden_states.to(query.dtype)
+            hidden_states = hidden_states.reshape(batch_size, q_seq_len, channels).contiguous()
+        elif AttentionMixin.attention_implementation == "torch_2.0_scaled_dot_product":
+            query = query.reshape(batch_size, q_seq_len, channels // head_dim, head_dim).transpose(1, 2).contiguous()
+            key = key.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).transpose(1, 2).contiguous()
+            value = value.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).transpose(1, 2).contiguous()
+
+            hidden_states = F.scaled_dot_product_attention(query, key, value)
+
+            hidden_states = hidden_states.to(query.dtype)
+            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, q_seq_len, channels).contiguous()
+        else:
+            assert False
+
+        hidden_states = to_out(hidden_states)
+
+        return hidden_states
+
+
+class Attention(nn.Module, AttentionMixin):
     def __init__(self, channels, encoder_hidden_states_dim):
         super().__init__()
         self.to_q = nn.Linear(channels, channels, bias=False)
@@ -1334,10 +1376,10 @@ class Attention(nn.Module):
         self.to_out = nn.Sequential(nn.Linear(channels, channels), nn.Dropout(0.0))
 
     def forward(self, hidden_states, encoder_hidden_states=None):
-        return attention(self.to_q, self.to_k, self.to_v, self.to_out, 64, hidden_states, encoder_hidden_states)
+        return self.attention(self.to_q, self.to_k, self.to_v, self.to_out, 64, hidden_states, encoder_hidden_states)
 
 
-class VaeMidBlockAttention(nn.Module):
+class VaeMidBlockAttention(nn.Module, AttentionMixin):
     def __init__(self, channels):
         super().__init__()
         self.group_norm = nn.GroupNorm(32, channels, eps=1e-06)
@@ -1355,41 +1397,13 @@ class VaeMidBlockAttention(nn.Module):
 
         hidden_states = self.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        hidden_states = attention(self.to_q, self.to_k, self.to_v, self.to_out, self.head_dim, hidden_states)
+        hidden_states = self.attention(self.to_q, self.to_k, self.to_v, self.to_out, self.head_dim, hidden_states)
 
         hidden_states = hidden_states.transpose(1, 2).view(batch_size, channels, height, width)
 
         hidden_states = hidden_states + residual
 
         return hidden_states
-
-
-def attention(to_q, to_k, to_v, to_out, head_dim, hidden_states, encoder_hidden_states=None):
-    batch_size, q_seq_len, channels = hidden_states.shape
-
-    if encoder_hidden_states is not None:
-        kv = encoder_hidden_states
-    else:
-        kv = hidden_states
-
-    kv_seq_len = kv.shape[1]
-
-    query = to_q(hidden_states)
-    key = to_k(kv)
-    value = to_v(kv)
-
-    query = query.reshape(batch_size, q_seq_len, channels // head_dim, head_dim).contiguous()
-    key = key.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
-    value = value.reshape(batch_size, kv_seq_len, channels // head_dim, head_dim).contiguous()
-
-    hidden_states = xformers.ops.memory_efficient_attention(query, key, value)
-
-    hidden_states = hidden_states.to(query.dtype)
-    hidden_states = hidden_states.reshape(batch_size, q_seq_len, channels).contiguous()
-
-    hidden_states = to_out(hidden_states)
-
-    return hidden_states
 
 
 class GEGLU(nn.Module):
