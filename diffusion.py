@@ -23,13 +23,13 @@ def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_wei
     for i in range(len(timesteps) - 1, -1, -1):
         t = timesteps[i]
 
-        sigma = sigmas[i]
+        sigma = sigmas[t]
 
         if i == 0:
             eps_hat = eps_theta(x_t=x_t, t=t, sigma=sigma)
             x_0_hat = x_t - sigma * eps_hat
         else:
-            dt = sigmas[i - 1] - sigma
+            dt = sigmas[timesteps[i - 1]] - sigma
 
             dx_by_dt = torch.zeros_like(x_t)
             dx_by_dt_cur = torch.zeros_like(x_t)
@@ -41,7 +41,8 @@ def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_wei
                 eps_hat = eps_theta(x_t=x_t_, t=t_, sigma=sigma)
                 # TODO - note which specific ode this is the solution to and
                 # how input scaling does/doesn't effect the solution
-                dx_by_dt_cur = (x_t_ - sigma * eps_hat) / sigma
+                # dx_by_dt_cur = (x_t_ - sigma * eps_hat) / sigma
+                dx_by_dt_cur = eps_hat
                 dx_by_dt += dx_by_dt_cur * rk_weight
 
             x_t_minus_1 = x_t + dx_by_dt * dt

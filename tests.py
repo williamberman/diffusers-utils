@@ -1,9 +1,11 @@
 import torch
-from diffusers import AutoencoderKL, UNet2DConditionModel
+from diffusers import (AutoencoderKL, StableDiffusionXLPipeline,
+                       UNet2DConditionModel)
 from PIL import Image
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
-from sdxl import (sdxl_text_conditioning,
+from diffusion import make_sigmas
+from sdxl import (sdxl_diffusion_loop, sdxl_text_conditioning,
                   sdxl_tokenize_one, sdxl_tokenize_two)
 from sdxl_models import AttentionMixin, SDXLUNet, SDXLVae
 
@@ -23,31 +25,16 @@ vae.to(dtype=torch.float16)
 vae_ = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
 vae_.to(device=device)
 
-unet = SDXLUNet.load_fp32(device=device)
+unet = SDXLUNet.load_fp16(device=device)
 
-# unet_ = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet", torch_dtype=torch.floa16, variant="fp16")
-unet_ = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet", torch_dtype=torch.float32)
+unet_ = UNet2DConditionModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="unet", torch_dtype=torch.float16, variant="fp16")
 unet_.to(device=device)
 
-
-def test_training():
-    ...
-
-
-def test_save_checkpoint():
-    ...
-
-
-def test_sdxl_dataset():
-    ...
-
-
-def test_sdxl_diffusion_loop():
-    ...
-
-
-def test_gen_sdxl_simplified_interface():
-    ...
+sdxl_pipe = StableDiffusionXLPipeline.from_pretrained(
+    "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16, unet=unet_, vae=vae_, text_encoder=text_encoder_one, text_encoder_2=text_encoder_two
+)
+sdxl_pipe.to(device)
+sdxl_pipe.set_progress_bar_config(disable=True)
 
 
 def test_sdxl_vae():
@@ -104,29 +91,21 @@ def test_sdxl_unet():
 
     total_diff = (expected_unet_output.float() - unet_output.float()).abs().sum()
 
-    assert total_diff < 5
+    assert total_diff < 12
 
 
-def test_sdxl_controlnet():
-    ...
+def test_text_to_image():
+    sigmas = make_sigmas(device=unet.device)
 
+    x_T = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=unet.dtype, device=unet.device, generator=torch.Generator(device).manual_seed(0))
+    x_T_ = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
 
-def test_sdxl_pre_encoded_controlnet_cond():
-    ...
-
-
-def test_sdxl_controlnet_full():
-    ...
-
-
-def test_sdxl_adapter():
-    ...
-
-
-def test_ode_solver_diffusion_loop():
-    ...
+    out = sdxl_diffusion_loop(["horse"], unet=unet, text_encoder_one=text_encoder_one, text_encoder_two=text_encoder_two, generator=torch.Generator(device).manual_seed(0), x_T=x_T_)
+    vae.output_tensor_to_pil(vae.decode(out))[0]
+    sdxl_pipe(prompt="horse", latents=x_T)
 
 
 if __name__ == "__main__":
     test_sdxl_vae()
     test_sdxl_unet()
+    test_text_to_image()

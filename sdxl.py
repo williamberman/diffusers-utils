@@ -707,7 +707,7 @@ def sdxl_diffusion_loop(
         x_T = x_T * ((sigmas.max() ** 2 + 1) ** 0.5)
 
     if timesteps is None:
-        timesteps = torch.linspace(0, sigmas.numel(), 50, dtype=torch.long, device=unet.device)
+        timesteps = torch.linspace(0, sigmas.numel() - 1, 50, dtype=torch.long, device=unet.device)
 
     if micro_conditioning is None:
         micro_conditioning = torch.tensor([[1024, 1024, 0, 0, 1024, 1024]], dtype=torch.long, device=unet.device)
@@ -723,10 +723,9 @@ def sdxl_diffusion_loop(
     else:
         controlnet_cond = None
 
-    eps_theta = lambda x_t, t, sigma: sdxl_eps_theta(
-        x_t=x_t,
-        t=t,
-        sigma=sigma,
+    eps_theta = lambda *args, **kwargs: sdxl_eps_theta(
+        *args,
+        **kwargs,
         unet=unet,
         encoder_hidden_states=encoder_hidden_states,
         pooled_encoder_hidden_states=pooled_encoder_hidden_states,
@@ -867,7 +866,7 @@ def gen_sdxl_simplified_interface(
 
     sigmas = make_sigmas()
 
-    timesteps = torch.linspace(0, sigmas.numel(), num_inference_steps, dtype=torch.long, device=unet.device)
+    timesteps = torch.linspace(0, sigmas.numel() - 1, num_inference_steps, dtype=torch.long, device=unet.device)
 
     if images is not None:
         if not isinstance(images, list):
