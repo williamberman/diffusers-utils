@@ -667,7 +667,7 @@ def apply_padding(mask, coord):
 
 @torch.no_grad()
 def sdxl_diffusion_loop(
-    prompts: List[str],
+    prompts: Union[str, List[str]],
     unet,
     text_encoder_one,
     text_encoder_two,
@@ -683,6 +683,9 @@ def sdxl_diffusion_loop(
     negative_prompts=None,
     diffusion_loop=euler_ode_solver_diffusion_loop,
 ):
+    if isinstance(prompts, str):
+        prompts = [prompts]
+
     batch_size = len(prompts)
 
     if negative_prompts is not None and guidance_scale > 1.0:
