@@ -9,6 +9,7 @@ from typing import Dict, List, Literal, Optional
 import safetensors.torch
 import torch
 import torch.distributed as dist
+import wandb
 import yaml
 from bitsandbytes.optim import AdamW8bit
 from torch.cuda.amp.grad_scaler import GradScaler
@@ -16,8 +17,6 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-
-import wandb
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -59,8 +58,12 @@ class TrainingConfig:
 
 
 def main():
-    from sdxl import (SDXLTraining, get_sdxl_conditioning_images,
-                      get_sdxl_dataset)
+    from sdxl import (
+        SDXLTraining, get_adapter_openpose_conditioning_image,
+        get_controlnet_canny_conditioning_image,
+        get_controlnet_inpainting_conditioning_image,
+        get_controlnet_pre_encoded_controlnet_inpainting_conditioning_image,
+        get_sdxl_dataset)
     from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
                              SDXLControlNetPreEncodedControlnetCond)
 
@@ -96,18 +99,23 @@ def main():
         from controlnet_aux import OpenposeDetector
 
         open_pose = OpenposeDetector.from_pretrained("lllyasviel/Annotators")
+        get_sdxl_conditioning_images = lambda *args, **kwargs: get_adapter_openpose_conditioning_image(*args, **kwargs, open_pose=open_pose)
+    elif config.controlnet_type == "canny":
+        get_sdxl_conditioning_images = get_controlnet_canny_conditioning_image
+    elif config.controlnet_type == "inpainting":
+        if config.controlnet_variant == "pre_encoded_controlnet_cond":
+            get_sdxl_conditioning_images = get_controlnet_pre_encoded_controlnet_inpainting_conditioning_image
+        else:
+            get_sdxl_conditioning_images = get_controlnet_inpainting_conditioning_image
     else:
-        open_pose = None
-    get_sdxl_conditioning_images_ = lambda *args, **kwargs: get_sdxl_conditioning_images(
-        *args, **kwargs, adapter_type=config.adapter_type, controlnet_type=config.controlnet_type, controlnet_variant=config.controlnet_variant, open_pose=open_pose
-    )
+        assert False
 
     dataset = get_sdxl_dataset(
         train_shards=config.train_shards,
         shuffle_buffer_size=config.shuffle_buffer_size,
         batch_size=config.batch_size,
         proportion_empty_prompts=config.proportion_empty_prompts,
-        get_sdxl_conditioning_images=get_sdxl_conditioning_images_,
+        get_sdxl_conditioning_images=get_sdxl_conditioning_images,
     )
 
     dataloader = DataLoader(
