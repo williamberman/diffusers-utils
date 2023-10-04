@@ -854,102 +854,112 @@ def sdxl_eps_theta(
 
 known_negative_prompt = "text, watermark, low-quality, signature, moiré pattern, downsampling, aliasing, distorted, blurry, glossy, blur, jpeg artifacts, compression artifacts, poorly drawn, low-resolution, bad, distortion, twisted, excessive, exaggerated pose, exaggerated limbs, grainy, symmetrical, duplicate, error, pattern, beginner, pixelated, fake, hyper, glitch, overexposed, high-contrast, bad-contrast"
 
+if __name__ == "__main__":
+    from argparse import ArgumentParser
 
-# TODO probably just combine with sdxl_diffusion_loop
-def gen_sdxl_simplified_interface(
-    prompts: Union[str, List[str]],
-    negative_prompts: Optional[Union[str, List[str]]] = None,
-    controlnet_checkpoint: Optional[str] = None,
-    controlnet: Optional[Literal["SDXLControlNet", "SDXLContolNetFull", "SDXLControlNetPreEncodedControlnetCond"]] = None,
-    adapter_checkpoint: Optional[str] = None,
-    num_inference_steps=50,
-    images=None,
-    masks=None,
-    apply_conditioning: Optional[Literal["canny"]] = None,
-    num_images: int = 1,
-    guidance_scale=5.0,
-    device: Optional[str] = None,
-    text_encoder_one=None,
-    text_encoder_two=None,
-    unet=None,
-    vae=None,
-):
-    if device is None:
+    args = ArgumentParser()
+    args.add_argument("--prompts", required=True, type=str, nargs="+")
+    args.add_argument("--negative_prompts", required=False, type=str, nargs="+")
+    args.add_argument("--use_known_negative_prompt", action="store_true")
+    args.add_argument("--num_images_per_prompt", required=True, type=int, default=1)
+    args.add_argument("--num_inference_steps", required=False, type=int, default=50)
+    args.add_argument("--images", required=False, type=str, default=None, nargs="+")
+    args.add_argument("--masks", required=False, type=str, default=None, nargs="+")
+    args.add_argument("--controlnet_checkpoint", required=False, type=str, default=None)
+    args.add_argument("--controlnet", required=False, choices=["SDXLControlNet", "SDXLControlNetFull", "SDXLControNetPreEncodedControlnetCond"], default=None)
+    args.add_argument("--adapter_checkpoint", required=False, type=str, default=None)
+    args.add_argument("--device", required=False, default=None)
+    args.add_argument("--dtype", required=False, default="fp16", choices=["fp16", "fp32"])
+    args.add_argument("--guidance_scale", required=False, default=5.0, type=float)
+    args.add_argument("--seed", required=False, type=int)
+    args = args.parse_args()
+
+    if args.device is None:
         if torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
 
-    if text_encoder_one is None:
+    if args.dtype == "fp16":
+        dtype = torch.float16
+
         text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder", variant="fp16", torch_dtype=torch.float16)
         text_encoder_one.to(device=device)
 
-    if text_encoder_two is None:
         text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2", variant="fp16", torch_dtype=torch.float16)
         text_encoder_two.to(device=device)
 
-    if vae is None:
+        vae = SDXLVae.load_fp16_fix(device=device)
+        vae.to(torch.float16)
+
+        unet = SDXLUNet.load_fp16(device=device)
+    elif args.dtype == "fp32":
+        dtype = torch.float32
+
+        text_encoder_one = CLIPTextModel.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder")
+        text_encoder_one.to(device=device)
+
+        text_encoder_two = CLIPTextModelWithProjection.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0", subfolder="text_encoder_2")
+        text_encoder_two.to(device=device)
+
         vae = SDXLVae.load_fp16_fix(device=device)
 
-    if unet is None:
-        unet = SDXLUNet.load_fp16(device=device)
+        unet = SDXLUNet.load_fp32(device=device)
+    else:
+        assert False
 
-    if isinstance(controlnet, str) and controlnet_checkpoint is not None:
-        if controlnet == "SDXLControlNet":
-            controlnet = SDXLControlNet.load(controlnet_checkpoint, device=device, dtype=torch.float16)
-        elif controlnet == "SDXLControlNetFull":
-            controlnet = SDXLControlNetFull.load(controlnet_checkpoint, device=device, dtype=torch.float16)
-        elif controlnet == "SDXLControlNetPreEncodedControlnetCond":
-            controlnet = SDXLControlNetPreEncodedControlnetCond.load(controlnet_checkpoint, device=device, dtype=torch.float16)
-        else:
-            assert False
+    if args.controlnet == "SDXLControlNet":
+        controlnet = SDXLControlNet.load(args.controlnet_checkpoint, device=device)
+        controlnet.to(dtype)
+    elif args.controlnet == "SDXLControlNetFull":
+        controlnet = SDXLControlNetFull.load(args.controlnet_checkpoint, device=device)
+        controlnet.to(dtype)
+    elif args.controlnet == "SDXLControlNetPreEncodedControlnetCond":
+        controlnet = SDXLControlNetPreEncodedControlnetCond.load(args.controlnet_checkpoint, device=device)
+        controlnet.to(dtype)
+    else:
+        controlnet = None
 
-    if adapter_checkpoint is not None:
-        adapter = SDXLAdapter.load(adapter_checkpoint, device=device, dtype=torch.float16)
+    if args.adapter_checkpoint is not None:
+        adapter = SDXLAdapter.load(args.adapter_checkpoint, device=device)
+        adapter.to(dtype)
     else:
         adapter = None
 
-    sigmas = make_sigmas()
+    sigmas = make_sigmas(device=device).to(unet.dtype)
 
-    timesteps = torch.linspace(0, sigmas.numel() - 1, num_inference_steps, dtype=torch.long, device=unet.device)
+    timesteps = torch.linspace(0, sigmas.numel() - 1, args.num_inference_steps, dtype=torch.long, device=unet.device)
 
-    if images is not None:
-        if not isinstance(images, list):
-            images = [images]
+    prompts = []
+    for prompt in args.prompts:
+        prompts += [prompt] * args.num_images_per_prompt
 
-        if masks is not None and not isinstance(masks, list):
-            masks = [masks]
+    if args.use_known_negative_prompt:
+        args.negative_prompts = [known_negative_prompt]
 
-        images_ = []
+    if args.negative_prompts is None:
+        negative_prompts = None
+    elif len(args.negative_prompts) == 1:
+        negative_prompts = args.negative_prompts * len(prompts)
+    elif len(args.negative_prompts) == len(args.prompts):
+        negative_prompts = []
+        for negative_prompt in args.negative_prompts:
+            negative_prompts += [negative_prompt] * args.num_images_per_prompt
+    else:
+        assert False
 
-        for image_idx, image in enumerate(images):
-            if isinstance(image, str):
-                image = Image.open(image)
-                image = image.convert("RGB")
-                image = image.resize((1024, 1024))
-            elif isinstance(image, Image.Image):
-                ...
-            else:
-                assert False
+    if args.images is not None:
+        images = []
 
-            if apply_conditioning == "canny":
-                import cv2
-
-                image = np.array(image)
-                image = cv2.Canny(image, 100, 200)
-                image = image[:, :, None]
-                controlnet_image = np.concatenate([controlnet_image, controlnet_image, controlnet_image], axis=2)
-
+        for image_idx, image in enumerate(args.images):
+            image = Image.open(image)
+            image = image.convert("RGB")
+            image = image.resize((1024, 1024))
             image = TF.to_tensor(image)
 
-            if masks is not None:
-                mask = masks[image_idx]
-                if isinstance(mask, str):
-                    mask = Image.open(mask)
-                elif isinstance(mask, Image.Image):
-                    ...
-                else:
-                    assert False
+            if args.masks is not None:
+                mask = args.masks[image_idx]
+                mask = Image.open(mask)
                 mask = mask.convert("L")
                 mask = mask.resize((1024, 1024))
                 mask = TF.to_tensor(mask)
@@ -957,83 +967,40 @@ def gen_sdxl_simplified_interface(
                 if isinstance(controlnet, SDXLControlNetPreEncodedControlnetCond):
                     image = image * (mask < 0.5)
                     image = TF.normalize(image, [0.5], [0.5])
-                    image = vae.encode(image[None, :, :, :].to(dtype=vae.dtype, device=vae.device)).to(dtype=unet.dtype, device=unet.device)
+                    image = vae.encode(image[None, :, :, :].to(dtype=vae.dtype, device=vae.device)).to(dtype=controlnet.dtype, device=controlnet.device)
                     mask = TF.resize(mask, (1024 // 8, 1024 // 8))[None, :, :, :].to(dtype=image.dtype, device=image.device)
                     image = torch.concat((image, mask), dim=1)
                 else:
-                    image = (image * (mask < 0.5) + -1.0 * (mask >= 0.5)).to(dtype=unet.dtype, device=unet.device)
+                    image = (image * (mask < 0.5) + -1.0 * (mask >= 0.5)).to(dtype=dtype, device=device)
                     image = image[None, :, :, :]
 
-            images_.append(image)
+            images += [image] * args.num_images_per_prompt
 
-        images_ = torch.concat(images_)
+        images = torch.concat(images)
     else:
-        images_ = None
+        images = None
 
-    if isinstance(prompts, str):
-        prompts = [prompts]
-    prompts_ = []
-    for prompt in prompts:
-        prompts_ += [prompt] * num_images
-
-    if negative_prompts is not None:
-        if isinstance(negative_prompts, str):
-            negative_prompts = [negative_prompts]
-        negative_prompts_ = []
-        for negative_prompt in negative_prompts:
-            negative_prompts_ += [negative_prompt] * num_images
+    if args.seed is None:
+        generator = None
     else:
-        negative_prompts_ = None
+        generator = torch.Generator(device).manual_seed(args.seed)
 
-    x_0 = sdxl_diffusion_loop(
-        prompts=prompts_,
-        negative_prompts=negative_prompts_,
+    images = sdxl_diffusion_loop(
+        prompts=prompts,
         unet=unet,
         text_encoder_one=text_encoder_one,
         text_encoder_two=text_encoder_two,
-        sigmas=sigmas,
-        timesteps=timesteps,
+        images=images,
         controlnet=controlnet,
         adapter=adapter,
-        images=images_,
-        guidance_scale=guidance_scale,
+        sigmas=sigmas,
+        timesteps=timesteps,
+        guidance_scale=args.guidance_scale,
+        negative_prompts=negative_prompts,
+        generator=generator,
     )
 
-    x_0 = vae.decode(x_0.to(vae.dtype))
-    x_0 = vae.output_tensor_to_pil(x_0)
-
-    return x_0
-
-
-if __name__ == "__main__":
-    from argparse import ArgumentParser
-
-    args = ArgumentParser()
-    args.add_argument("--prompt", required=True, type=str)
-    args.add_argument("--num_images", required=True, type=int, default=1)
-    args.add_argument("--num_inference_steps", required=False, type=int, default=50)
-    args.add_argument("--image", required=False, type=str, default=None)
-    args.add_argument("--mask", required=False, type=str, default=None)
-    args.add_argument("--controlnet_checkpoint", required=False, type=str, default=None)
-    args.add_argument("--controlnet", required=False, choices=["SDXLControlNet", "SDXLControlNetFull", "SDXLControNetPreEncodedControlnetCond"], default=None)
-    args.add_argument("--adapter_checkpoint", required=False, type=str, default=None)
-    args.add_argument("--apply_conditioning", choices=["canny"], required=False, default=None)
-    args.add_argument("--device", required=False, default=None)
-    args = args.parse_args()
-
-    images = gen_sdxl_simplified_interface(
-        prompt=args.prompt,
-        num_images=args.num_images,
-        num_inference_steps=args.num_inference_steps,
-        images=[args.image],
-        masks=[args.mask],
-        controlnet_checkpoint=args.controlnet_checkpoint,
-        controlnet=args.controlnet,
-        adapter_checkpoint=args.adapter_checkpoint,
-        apply_conditioning=args.apply_conditioning,
-        device=args.device,
-        negative_prompt=known_negative_prompt,
-    )
+    images = vae.output_tensor_to_pil(vae.decode(images))
 
     for i, image in enumerate(images):
         image.save(f"out_{i}.png")
