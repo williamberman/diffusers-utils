@@ -1,6 +1,6 @@
 import math
 import os
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Union
 
 import safetensors.torch
 import torch
@@ -21,12 +21,14 @@ class ModelUtils:
         return next(self.parameters()).device
 
     @classmethod
-    def load(cls, load_from: str, device, overrides: Optional[List[str]] = None):
+    def load(cls, load_from: str, device, overrides: Optional[Union[str, List[str]]] = None):
         import load_state_dict_patch
 
         load_from = [load_from]
 
         if overrides is not None:
+            if isinstance(overrides, str):
+                overrides = [overrides]
             load_from += overrides
 
         state_dict = {}
