@@ -10,11 +10,11 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 from diffusion import make_sigmas
 from sdxl import (sdxl_diffusion_loop, sdxl_text_conditioning,
                   sdxl_tokenize_one, sdxl_tokenize_two)
-from sdxl_models import (AttentionMixin, SDXLControlNet,
+from sdxl_models import (SDXLControlNet,
                          SDXLControlNetPreEncodedControlnetCond, SDXLUNet,
-                         SDXLVae)
+                         SDXLVae, set_attention_implementation)
 
-AttentionMixin.attention_implementation = "torch_2.0_scaled_dot_product"
+set_attention_implementation("torch_2.0_scaled_dot_product")
 torch.backends.cuda.enable_math_sdp(True)
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
