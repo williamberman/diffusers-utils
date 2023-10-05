@@ -7,7 +7,8 @@ from diffusers import (AutoencoderKL, StableDiffusionXLPipeline,
 from PIL import Image
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
-from diffusion import make_sigmas
+from diffusion import (heun_ode_solver_diffusion_loop, make_sigmas,
+                       rk4_ode_solver_diffusion_loop, set_with_tqdm)
 from sdxl import (sdxl_diffusion_loop, sdxl_text_conditioning,
                   sdxl_tokenize_one, sdxl_tokenize_two)
 from sdxl_models import (SDXLControlNet,
@@ -18,6 +19,8 @@ set_attention_implementation("torch_2.0_scaled_dot_product")
 torch.backends.cuda.enable_math_sdp(True)
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
+
+set_with_tqdm(True)
 
 device = "cuda"
 dtype = torch.float32
@@ -162,6 +165,54 @@ def test_text_to_image():
 
 
 @torch.no_grad()
+def test_heun():
+    sigmas = make_sigmas(device=unet.device).to(dtype=unet.dtype)
+    # fmt: off
+    timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
+    # fmt: on
+
+    x_T = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=dtype, device=unet_.device, generator=torch.Generator(device).manual_seed(0))
+    x_T_ = x_T * ((sigmas[timesteps[-1]] ** 2 + 1) ** 0.5)
+
+    out = sdxl_diffusion_loop(
+        ["horse"],
+        unet=unet,
+        text_encoder_one=text_encoder_one,
+        text_encoder_two=text_encoder_two,
+        generator=torch.Generator(device).manual_seed(0),
+        x_T=x_T_,
+        timesteps=timesteps,
+        sigmas=sigmas,
+        diffusion_loop=heun_ode_solver_diffusion_loop,
+    )
+    vae.output_tensor_to_pil(vae.decode(out))[0].save("./out.png")
+
+
+@torch.no_grad()
+def test_rk4():
+    sigmas = make_sigmas(device=unet.device).to(dtype=unet.dtype)
+    # fmt: off
+    timesteps = torch.tensor([1, 21, 41, 61, 81, 101, 121, 141, 161, 181, 201, 221, 241, 261, 281, 301, 321, 341, 361, 381, 401, 421, 441, 461, 481, 501, 521, 541, 561, 581, 601, 621, 641, 661, 681, 701, 721, 741, 761, 781, 801, 821, 841, 861, 881, 901, 921, 941, 961, 981], dtype=torch.long, device=device)
+    # fmt: on
+
+    x_T = torch.randn((1, 4, 1024 // 8, 1024 // 8), dtype=dtype, device=unet_.device, generator=torch.Generator(device).manual_seed(0))
+    x_T_ = x_T * ((sigmas[timesteps[-1]] ** 2 + 1) ** 0.5)
+
+    out = sdxl_diffusion_loop(
+        ["horse"],
+        unet=unet,
+        text_encoder_one=text_encoder_one,
+        text_encoder_two=text_encoder_two,
+        generator=torch.Generator(device).manual_seed(0),
+        x_T=x_T_,
+        timesteps=timesteps,
+        sigmas=sigmas,
+        diffusion_loop=rk4_ode_solver_diffusion_loop,
+    )
+    vae.output_tensor_to_pil(vae.decode(out))[0].save("./out.png")
+
+
+@torch.no_grad()
 def test_controlnet():
     import cv2
 
@@ -239,5 +290,7 @@ if __name__ == "__main__":
     test_sdxl_vae()
     test_sdxl_unet()
     test_text_to_image()
+    test_heun()
+    test_rk4()
     test_controlnet()
     test_controlnet_pre_encoded_controlnet_cond()

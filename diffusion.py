@@ -16,11 +16,27 @@ def make_sigmas(beta_start=0.00085, beta_end=0.012, num_train_timesteps=default_
     return sigmas
 
 
+_with_tqdm = False
+
+
+def set_with_tqdm(it):
+    global _with_tqdm
+
+    _with_tqdm = it
+
+
 @torch.no_grad()
 def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_weights):
     x_t = x_T
 
-    for i in range(len(timesteps) - 1, -1, -1):
+    iter_over = range(len(timesteps) - 1, -1, -1)
+
+    if _with_tqdm:
+        from tqdm import tqdm
+
+        iter_over = tqdm(iter_over)
+
+    for i in iter_over:
         t = timesteps[i].unsqueeze(0)
         sigma = sigmas[t]
 

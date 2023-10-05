@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms
 import torchvision.transforms.functional as TF
-import wandb
 import webdataset as wds
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -17,6 +16,7 @@ from torch.utils.data import default_collate
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
+import wandb
 from diffusion import (default_num_train_timesteps,
                        euler_ode_solver_diffusion_loop, make_sigmas)
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,

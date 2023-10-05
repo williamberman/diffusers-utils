@@ -4,11 +4,11 @@ from typing import List
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
-import wandb
 from huggingface_hub import hf_hub_download
 from PIL import Image
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
+import wandb
 from sdxl import (
     get_controlnet_inpainting_conditioning_image,
     get_controlnet_pre_encoded_controlnet_inpainting_conditioning_image,
