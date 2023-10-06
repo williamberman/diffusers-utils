@@ -185,7 +185,7 @@ def test_heun():
         sigmas=sigmas,
         diffusion_loop=heun_ode_solver_diffusion_loop,
     )
-    vae.output_tensor_to_pil(vae.decode(out))[0].save("./out.png")
+    vae.output_tensor_to_pil(vae.decode(out))[0]
 
 
 @torch.no_grad()

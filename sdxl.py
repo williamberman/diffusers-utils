@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms
 import torchvision.transforms.functional as TF
-import webdataset as wds
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import default_collate
@@ -348,6 +347,8 @@ class SDXLTraining:
 
 
 def get_sdxl_dataset(train_shards: str, shuffle_buffer_size: int, batch_size: int, proportion_empty_prompts: float, get_sdxl_conditioning_images=None):
+    import webdataset as wds
+
     dataset = (
         wds.WebDataset(
             train_shards,
