@@ -152,6 +152,7 @@ def test_text_to_image():
         sigmas=sigmas,
     )
     out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out.save("./output/test_text_to_image.png")
     out = np.array(out).astype(np.int32)
 
     expected_out = sdxl_pipe(prompt="horse", latents=x_T).images[0]
@@ -185,7 +186,8 @@ def test_heun():
         sigmas=sigmas,
         diffusion_loop=heun_ode_solver_diffusion_loop,
     )
-    vae.output_tensor_to_pil(vae.decode(out))[0]
+    out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out.save("./output/test_heun.png")
 
 
 @torch.no_grad()
@@ -209,7 +211,8 @@ def test_rk4():
         sigmas=sigmas,
         diffusion_loop=rk4_ode_solver_diffusion_loop,
     )
-    vae.output_tensor_to_pil(vae.decode(out))[0].save("./out.png")
+    out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out.save("./output/test_rk4.png")
 
 
 @torch.no_grad()
@@ -249,6 +252,7 @@ def test_controlnet():
         images=image,
     )
     out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out.save("./output/test_controlnet.png")
 
 
 def test_controlnet_pre_encoded_controlnet_cond():
@@ -284,6 +288,7 @@ def test_controlnet_pre_encoded_controlnet_cond():
         images=image,
     )
     out = vae.output_tensor_to_pil(vae.decode(out))[0]
+    out.save("./output/test_controlnet_pre_encoded_controlnet_cond.png")
 
 
 if __name__ == "__main__":

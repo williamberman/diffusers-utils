@@ -25,6 +25,8 @@ def set_with_tqdm(it):
     _with_tqdm = it
 
 
+# TODO - document dsigma, how does dsigma differ from dt and especially we write dx_by_dt * dsigma which
+# seems off
 @torch.no_grad()
 def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_weights):
     x_t = x_T
@@ -44,23 +46,24 @@ def rk_ode_solver_diffusion_loop(eps_theta, timesteps, sigmas, x_T, rk_steps_wei
             eps_hat = eps_theta(x_t=x_t, t=t, sigma=sigma)
             x_0_hat = x_t - sigma * eps_hat
         else:
-            dt = sigmas[timesteps[i - 1]] - sigma
-
             dx_by_dt = torch.zeros_like(x_t)
             dx_by_dt_cur = torch.zeros_like(x_t)
 
             for rk_step, rk_weight in rk_steps_weights:
-                dt_ = dt * rk_step
-                t_ = t + dt_
-                x_t_ = x_t + dx_by_dt_cur * dt_
-                eps_hat = eps_theta(x_t=x_t_, t=t_, sigma=sigma)
+                dt = (rk_step * (timesteps[i - 1] - timesteps[i])).round().to(dtype=torch.long)
+                t_ = t + dt
+                sigma_ = sigmas[t_]
+                dsigma = sigma_ - sigma
+                x_t_ = x_t + dx_by_dt_cur * dsigma
+                eps_hat = eps_theta(x_t=x_t_, t=t_, sigma=sigma_)
                 # TODO - note which specific ode this is the solution to and
                 # how input scaling does/doesn't effect the solution
                 # dx_by_dt_cur = (x_t_ - sigma * eps_hat) / sigma
                 dx_by_dt_cur = eps_hat
                 dx_by_dt += dx_by_dt_cur * rk_weight
 
-            x_t_minus_1 = x_t + dx_by_dt * dt
+            dsigma = sigmas[timesteps[i - 1]] - sigma
+            x_t_minus_1 = x_t + dx_by_dt * dsigma
 
             x_t = x_t_minus_1
 

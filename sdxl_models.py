@@ -20,7 +20,7 @@ class ModelUtils:
         return next(self.parameters()).device
 
     @classmethod
-    def load(cls, load_from: str, device='cpu', overrides: Optional[Union[str, List[str]]] = None):
+    def load(cls, load_from: str, device="cpu", overrides: Optional[Union[str, List[str]]] = None):
         import load_state_dict_patch
 
         load_from = [load_from]
@@ -221,15 +221,15 @@ class SDXLVae(nn.Module, ModelUtils):
         return x_pred
 
     @classmethod
-    def load_fp32(cls, device='cpu', overrides=None):
+    def load_fp32(cls, device="cpu", overrides=None):
         return cls.load("./weights/sdxl_vae.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16(cls, device='cpu', overrides=None):
+    def load_fp16(cls, device="cpu", overrides=None):
         return cls.load("./weights/sdxl_vae.fp16.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16_fix(cls, device='cpu', overrides=None):
+    def load_fp16_fix(cls, device="cpu", overrides=None):
         return cls.load("./weights/sdxl_vae_fp16_fix.safetensors", device=device, overrides=overrides)
 
 
@@ -449,11 +449,11 @@ class SDXLUNet(nn.Module, ModelUtils):
         return eps_hat
 
     @classmethod
-    def load_fp32(cls, device='cpu', overrides=None):
+    def load_fp32(cls, device="cpu", overrides=None):
         return cls.load("./weights/sdxl_unet.safetensors", device=device, overrides=overrides)
 
     @classmethod
-    def load_fp16(cls, device='cpu', overrides=None):
+    def load_fp16(cls, device="cpu", overrides=None):
         return cls.load("./weights/sdxl_unet.fp16.safetensors", device=device, overrides=overrides)
 
 
