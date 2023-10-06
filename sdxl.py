@@ -15,7 +15,6 @@ from torch.utils.data import default_collate
 from transformers import (CLIPTextModel, CLIPTextModelWithProjection,
                           CLIPTokenizerFast)
 
-import wandb
 from diffusion import (default_num_train_timesteps,
                        euler_ode_solver_diffusion_loop, make_sigmas)
 from sdxl_models import (SDXLAdapter, SDXLControlNet, SDXLControlNetFull,
@@ -234,6 +233,8 @@ class SDXLTraining:
 
     @torch.no_grad()
     def log_validation(self, step, num_validation_images: int, validation_prompts: Optional[List[str]] = None, validation_images: Optional[List[str]] = None):
+        import wandb
+
         if isinstance(self.unet, DDP):
             unet = self.unet.module
             unet.eval()
